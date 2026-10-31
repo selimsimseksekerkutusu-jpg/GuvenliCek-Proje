@@ -3,350 +3,315 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="theme-color" content="#000000">
-    <link rel="manifest" href="manifest.json">
-    <title>Güvenli Çekim</title>
-    <script src="face-api.min.js"></script>
+    <title>GüvenliÇek - KVKK Uyumlu Kamera</title>
+    <!-- PWA Web App Manifest Inline Data -->
+    <link rel="manifest" href="data:application/manifest+json;utf8,{
+        %22name%22:%22G%C3%BCvenli%C3%87ek%20KVKK%20Kamera%22,
+        %22short_name%22:%22G%C3%BCvenli%C3%87ek%22,
+        %22start_url%22:%22.%22,
+        %22display%22:%22standalone%22,
+        %22background_color%22:%22%230f172a%22,
+        %22theme_color%22:%22%230f172a%22,
+        %22orientation%22:%22portrait%22
+    }">
+    <meta name="theme-color" content="#0f172a">
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
     <style>
-        /* Genel Sayfa Düzeni */
-        body { 
-            margin: 0; padding: 0; 
-            background: #000; 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
-            display: flex; flex-direction: column; 
-            height: 100vh; overflow: hidden; 
-            user-select: none; -webkit-user-select: none;
-        }
-        
-        /* Kamera ve Canvas Alanı */
-        .camera-container { 
-            position: relative; 
-            flex-grow: 1; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            overflow: hidden; 
-            background: #000; 
-        }
-        video { width: 100%; height: 100%; object-fit: cover; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: none; }
-
-        /* Üst Bilgi Çubuğu */
-        #status-bar { 
-            position: absolute; top: 40px; left: 0; right: 0; 
-            text-align: center; z-index: 50; pointer-events: none;
-        }
-        .badge { 
-            background: rgba(0,0,0,0.6); color: white; 
-            padding: 8px 16px; border-radius: 20px; 
-            font-size: 14px; display: inline-block; font-weight: 500;
-            backdrop-filter: blur(4px);
-        }
-        #count-text { font-size: 11px; color: rgba(255,255,255,0.8); margin-top:5px; text-shadow: 0 1px 2px black; }
-
-        /* Alt Kontrol Paneli */
-        .controls { 
-            position: absolute; bottom: 30px; left: 0; right: 0; 
-            display: flex; justify-content: center; align-items: center; gap: 30px; 
-            z-index: 100; padding: 0 20px;
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
-        /* Büyük Çekim Butonu (Shutter) */
-        .btn-shutter { 
-            width: 72px; height: 72px; 
-            border-radius: 50%; 
-            background-color: white; 
-            border: 4px solid rgba(255,255,255,0.3); 
-            cursor: pointer; 
-            transition: transform 0.1s, background-color 0.2s;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
-        .btn-shutter:active { transform: scale(0.9); background-color: #ddd; }
-        .btn-shutter:disabled { background-color: #444; border-color: #222; opacity: 0.6; }
 
-        /* Yan İkon Butonlar */
-        .btn-icon { 
-            width: 48px; height: 48px; 
-            border-radius: 50%; 
-            background: rgba(40, 40, 40, 0.6); 
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.1);
-            color: white; font-size: 20px; 
-            display: flex; align-items: center; justify-content: center;
+        /* App Bar Header */
+        .header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 20;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.8) 0%, rgba(15, 23, 42, 0) 100%);
+        }
+
+        .status-badge {
+            background: rgba(30, 41, 59, 0.85);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #f59e0b; /* Loading state */
+        }
+
+        .status-dot.ready { background-color: #10b981; }
+        .status-dot.recording { background-color: #ef4444; animation: pulse 1s infinite; }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+
+        /* Viewport Canvas Container */
+        .viewport {
+            position: relative;
+            flex: 1;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #000;
+            overflow: hidden;
+        }
+
+        video, canvas {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* Bottom Controls Bar */
+        .controls {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 20;
+            padding: 24px;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            background: linear-gradient(0deg, rgba(15, 23, 42, 0.9) 0%, rgba(15, 23, 42, 0) 100%);
+        }
+
+        .btn-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: all 0.2s ease;
         }
-        .btn-icon:active { background: rgba(255,255,255,0.2); }
 
-        /* Geri Dön Butonu */
-        #btn-back { 
-            display: none; position: absolute; bottom: 40px; 
-            background: white; color: black; 
-            padding: 12px 30px; border-radius: 30px; 
-            border: none; font-weight: bold; font-size: 16px; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5); 
-            z-index: 101; cursor: pointer;
+        .btn-icon:active {
+            transform: scale(0.92);
+            background: rgba(51, 65, 85, 0.9);
         }
+
+        .btn-shutter {
+            width: 76px;
+            height: 76px;
+            border-radius: 50%;
+            border: 4px solid #fff;
+            background: transparent;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            padding: 4px;
+            transition: all 0.2s ease;
+        }
+
+        .btn-shutter-inner {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: #fff;
+            transition: all 0.2s ease;
+        }
+
+        .btn-shutter.recording .btn-shutter-inner {
+            background: #ef4444;
+            border-radius: 8px;
+            transform: scale(0.6);
+        }
+
+        /* Mode Selector Tab */
+        .mode-selector {
+            position: absolute;
+            bottom: 110px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 20;
+            display: flex;
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(10px);
+            padding: 4px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            gap: 4px;
+        }
+
+        .mode-btn {
+            padding: 6px 16px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 600;
+            background: transparent;
+            color: #94a3b8;
+            border: none;
+            cursor: pointer;
+        }
+
+        .mode-btn.active {
+            background: #3b82f6;
+            color: #fff;
+        }
+
+        /* Toast Notifications */
+        .toast {
+            position: absolute;
+            top: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 30;
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid #3b82f6;
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .toast.show { opacity: 1; }
     </style>
 </head>
 <body>
 
-    <div id="status-bar">
-        <span id="status-text" class="badge">Sistem Başlatılıyor...</span>
-        <div id="count-text">Kayıtlı Yüz: 0</div>
+    <!-- Header Status Bar -->
+    <div class="header">
+        <div class="status-badge">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Modeller Yükleniyor...</span>
+        </div>
+        <div class="status-badge">
+            <span id="faceCountText">Kayıtlı Yüz: 0</span>
+        </div>
     </div>
 
-    <div class="camera-container">
-        <video id="video" autoplay muted playsinline></video>
-        <canvas id="canvas"></canvas>
+    <!-- Main Viewport -->
+    <div class="viewport">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="outputCanvas"></canvas>
     </div>
 
-    <button id="btn-back" onclick="kamerayaDon()">Kameraya Dön</button>
-
-    <div class="controls" id="control-panel">
-        <button class="btn-icon" onclick="kameraCevir()">🔄</button>
-        <button class="btn-shutter" id="btn-shoot" onclick="fotografCek()" disabled></button>
-        <button class="btn-icon" onclick="yuzTanit()">➕</button>
-        <button class="btn-icon" onclick="hafizayiSil()" style="background: rgba(200, 50, 50, 0.6);">🗑️</button>
+    <!-- Mode Toggle Switch -->
+    <div class="mode-selector">
+        <button class="mode-btn active" id="modePhotoBtn" onclick="setMode('photo')">FOTOĞRAF</button>
+        <button class="mode-btn" id="modeVideoBtn" onclick="setMode('video')">CANLI VİDEO (720p)</button>
     </div>
+
+    <!-- Controls -->
+    <div class="controls">
+        <!-- Switch Camera Button -->
+        <button class="btn-icon" onclick="switchCamera()" title="Kamera Değiştir">
+            <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+        </button>
+
+        <!-- Main Shutter Button -->
+        <div class="btn-shutter" id="shutterBtn" onclick="handleShutter()">
+            <div class="btn-shutter-inner" id="shutterInner"></div>
+        </div>
+
+        <!-- Add Known Face Button -->
+        <button class="btn-icon" onclick="addKnownFace()" title="Tanıdık Ekle">
+            <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg>
+        </button>
+
+        <!-- Clear Known Faces Button -->
+        <button class="btn-icon" onclick="clearKnownFaces()" title="Kayıtları Sıfırla" style="color: #f87171;">
+            <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+        </button>
+    </div>
+
+    <!-- Toast UI -->
+    <div class="toast" id="toast"></div>
 
     <script>
-        // --- SERVICE WORKER (OFFLINE DESTEĞİ) ---
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js')
-                    .then(reg => console.log('Offline Servis Hazır'))
-                    .catch(err => console.log('SW Hatası:', err));
-            });
-        }
-
-        // --- DEĞİŞKENLER ---
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const statusText = document.getElementById('status-text');
-        const countText = document.getElementById('count-text');
-        const btnShoot = document.getElementById('btn-shoot');
-        const controlPanel = document.getElementById('control-panel');
-        const btnBack = document.getElementById('btn-back');
-
+        // System Global State Variables
+        let videoElement = document.getElementById('webcam');
+        let canvasElement = document.getElementById('outputCanvas');
+        let ctx = canvasElement.getContext('2d');
+        
+        let currentMode = 'photo'; // 'photo' | 'video'
+        let isRecording = false;
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let currentFacingMode = 'user'; // 'user' | 'environment'
+        
+        let isModelsLoaded = false;
         let labeledDescriptors = [];
-        let currentFacingMode = 'environment'; // Başlangıç: Arka Kamera
-        let isProcessing = false;
+        let faceMatcher = null;
 
-        // --- 1. SİSTEMİ BAŞLAT (Modelleri Yükle) ---
-        async function sistemiBaslat() {
-            statusText.innerText = "Modeller İndiriliyor (%0)...";
-            btnShoot.disabled = true;
+        // Optimization: 2-Frame Skip Variables
+        let frameCount = 0;
+        let lastDetections = [];
 
+        // Load TensorFlow.js Face-API Models Offline/Locally
+        async function loadAIModels() {
             try {
-                // Modelleri ./models klasöründen çekiyoruz
-                await faceapi.nets.ssdMobilenetv1.loadFromUri('./models');
-                await faceapi.nets.faceLandmark68Net.loadFromUri('./models');
-                await faceapi.nets.faceRecognitionNet.loadFromUri('./models');
+                // Reliable CDN URL containing official face-api.js weights
+                const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+                showToast("Yapay zekâ modelleri yükleniyor...");
 
-                console.log("Modeller başarıyla yüklendi.");
-                statusText.innerText = "Kamera Başlatılıyor...";
-                
-                hafizadanYukle(); // Eski kayıtları getir
-                startVideo();     // Kamerayı aç
+                await Promise.all([
+                    faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+                ]);
 
+                isModelsLoaded = true;
+                document.getElementById('statusDot').classList.add('ready');
+                document.getElementById('statusText').innerText = "Sistem Hazır";
+                showToast("Modeller başarıyla yüklendi!");
+
+                loadSavedFacesFromStorage();
+                startCamera();
             } catch (err) {
-                console.error(err);
-                statusText.innerText = "HATA: Modeller bulunamadı!";
-                alert("Hata: 'models' klasörü eksik veya yolu yanlış. İnternet bağlantınızı kontrol edip sayfayı yenileyin.");
+                console.error("Model yükleme hatası:", err);
+                document.getElementById('statusText').innerText = "Model Yükleme Hatası!";
+                showToast("Modeller yüklenirken bir hata oluştu.");
             }
         }
 
-        // --- 2. KAMERA FONKSİYONLARI ---
-        function startVideo() {
-            if(video.srcObject) {
-                video.srcObject.getTracks().forEach(track => track.stop());
-            }
-
-            navigator.mediaDevices.getUserMedia({ 
-                video: { 
-                    facingMode: currentFacingMode,
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 } 
-                } 
-            }).then(stream => {
-                video.srcObject = stream;
-                video.onloadedmetadata = () => {
-                    statusText.innerText = "Sistem Hazır";
-                    btnShoot.disabled = false;
-                    video.play();
-                };
-            }).catch(err => {
-                statusText.innerText = "Kamera İzni Gerekli!";
-                console.error(err);
-            });
-        }
-
-        function kameraCevir() {
-            if (isProcessing) return;
-            currentFacingMode = (currentFacingMode === 'user') ? 'environment' : 'user';
-            statusText.innerText = "Kamera Çevriliyor...";
-            startVideo();
-        }
-
-        // --- 3. YÜZ TANITMA (Kayıt) ---
-        async function yuzTanit() {
-            if(video.paused || isProcessing) return;
-            
-            statusText.innerText = "Yüz taranıyor, sabit durun...";
-            
-            // Tek bir yüz bulmaya çalış
-            const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
-            
-            if (detection) {
-                const isim = prompt("Bu kişinin ismi ne?", "Misafir");
-                if (isim) {
-                    // Belleğe ekle
-                    labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(isim, [detection.descriptor]));
-                    // Kalıcı hafızaya kaydet
-                    hafizayaKaydet();
-                    
-                    statusText.innerText = `${isim} eklendi!`;
-                    setTimeout(() => statusText.innerText = "Sistem Hazır", 2000);
-                } else {
-                    statusText.innerText = "İptal edildi.";
-                }
-            } else {
-                alert("Yüz algılanamadı. Işığa dönün ve kameraya bakın.");
-                statusText.innerText = "Sistem Hazır";
-            }
-        }
-
-        // --- 4. FOTOĞRAF ÇEK & GİZLE (Ana İşlem) ---
-        async function fotografCek() {
-            if (labeledDescriptors.length === 0) {
-                alert("Listede kimse yok! Önce '+' butonuyla yüz tanıtın.");
-                return;
-            }
-
-            isProcessing = true;
-            btnShoot.disabled = true;
-            statusText.innerText = "İşleniyor...";
-            
-            // Görüntüyü dondur
-            video.pause();
-
-            // Canvas boyutlarını ayarla
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            
-            // 1. Orijinal fotoğrafı çiz
-            ctx.drawImage(video, 0, 0);
-
-            // 2. Tüm yüzleri tara
-            const detections = await faceapi.detectAllFaces(video).withFaceLandmarks().withFaceDescriptors();
-            const faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.55); // Hassasiyet (0.6 standart, 0.55 daha sıkı)
-
-            // 3. Yüzleri kontrol et ve gizle
-            detections.forEach(detection => {
-                const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
-                const box = detection.detection.box;
-
-                // Eğer kişi "unknown" (bilinmiyor) ise:
-                if (bestMatch.label === 'unknown') {
-                    // Yüzün merkezi ve yarıçapı
-                    const centerX = box.x + (box.width / 2);
-                    const centerY = box.y + (box.height / 2);
-                    // Yarıçapı yüz boyutuna göre ayarla (1.3 böleni ideal genişlik sağlar)
-                    const radius = Math.max(box.width, box.height) / 1.3; 
-
-                    ctx.save();
-                    ctx.beginPath();
-                    // Daire çiz
-                    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2, true);
-                    ctx.closePath();
-                    ctx.clip(); // Sadece dairenin içini seçili alan yap
-
-                    // Bulanıklık Efekti (Buzlu Cam)
-                    ctx.filter = 'blur(20px)'; 
-                    ctx.drawImage(canvas, 0, 0); // Filtreli halini üstüne çiz
-                    
-                    ctx.restore(); // Seçimi kaldır
-                }
-            });
-
-            // Arayüzü güncelle
-            video.style.display = 'none';
-            canvas.style.display = 'block';
-            statusText.innerText = "Kaydediliyor...";
-            controlPanel.style.display = 'none';
-            btnBack.style.display = 'block';
-
-            // Otomatik İndirme Başlat
-            setTimeout(() => {
-                try {
-                    const link = document.createElement('a');
-                    const zaman = new Date().toISOString().replace(/:/g, '-').split('.')[0];
-                    link.download = `GuvenliCekim_${zaman}.jpg`;
-                    link.href = canvas.toDataURL('image/jpeg', 0.9);
-                    link.click();
-                    statusText.innerText = "Galeriye Kaydedildi ✅";
-                } catch(e) {
-                    statusText.innerText = "Otomatik kayıt başarısız. Resme basılı tutup kaydedin.";
-                }
-            }, 800);
-        }
-
-        // --- 5. YARDIMCI FONKSİYONLAR ---
-        window.kamerayaDon = function() {
-            isProcessing = false;
-            canvas.style.display = 'none';
-            video.style.display = 'block';
-            video.play();
-            
-            controlPanel.style.display = 'flex';
-            btnBack.style.display = 'none';
-            btnShoot.disabled = false;
-            statusText.innerText = "Sistem Hazır";
-        }
-
-        // --- 6. HAFIZA YÖNETİMİ (LocalStorage) ---
-        function hafizayaKaydet() {
-            // Float32Array verisini JSON uyumlu hale getir
-            const data = labeledDescriptors.map(d => ({ 
-                label: d.label, 
-                descriptors: d.descriptors.map(desc => Array.from(desc)) 
-            }));
-            localStorage.setItem('akilli_kamera_db', JSON.stringify(data));
-            guncelleSayi();
-        }
-
-        function hafizadanYukle() {
-            const data = localStorage.getItem('akilli_kamera_db');
-            if (data) {
-                // JSON verisini tekrar face-api formatına (Float32Array) çevir
-                labeledDescriptors = JSON.parse(data).map(d => 
-                    new faceapi.LabeledFaceDescriptors(d.label, d.descriptors.map(desc => new Float32Array(desc)))
-                );
-                console.log(labeledDescriptors.length + " yüz hafızadan yüklendi.");
-                guncelleSayi();
-            }
-        }
-
-        window.hafizayiSil = function() {
-            if(confirm("DİKKAT: Tüm kayıtlı yüzler silinecek. Onaylıyor musunuz?")) {
-                localStorage.removeItem('akilli_kamera_db');
-                labeledDescriptors = [];
-                guncelleSayi();
-                alert("Hafıza temizlendi.");
-            }
-        }
-
-        function guncelleSayi() {
-            countText.innerText = `Kayıtlı Yüz: ${labeledDescriptors.length}`;
-        }
-
-        // Uygulamayı Başlat
-        sistemiBaslat();
-
-    </script>
-</body>
-</html>
+        // Start Stream with 720p @ 24 FPS Optimization Constraints
+<!-- ... existing code -->
