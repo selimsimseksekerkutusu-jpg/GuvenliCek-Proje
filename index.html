@@ -1,317 +1,93 @@
-<!DOCTYPE html>
-<html lang="tr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>GüvenliÇek - KVKK Uyumlu Kamera</title>
-    <!-- PWA Web App Manifest Inline Data -->
-    <link rel="manifest" href="data:application/manifest+json;utf8,{
-        %22name%22:%22G%C3%BCvenli%C3%87ek%20KVKK%20Kamera%22,
-        %22short_name%22:%22G%C3%BCvenli%C3%87ek%22,
-        %22start_url%22:%22.%22,
-        %22display%22:%22standalone%22,
-        %22background_color%22:%22%230f172a%22,
-        %22theme_color%22:%22%230f172a%22,
-        %22orientation%22:%22portrait%22
-    }">
-    <meta name="theme-color" content="#0f172a">
-    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            user-select: none;
-            -webkit-user-select: none;
-        }
-
-        body {
-            background-color: #0f172a;
-            color: #f8fafc;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            overflow: hidden;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-
-        /* App Bar Header */
-        .header {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 20;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px;
-            background: linear-gradient(180deg, rgba(15, 23, 42, 0.8) 0%, rgba(15, 23, 42, 0) 100%);
-        }
-
-        .status-badge {
-            background: rgba(30, 41, 59, 0.85);
-            backdrop-filter: blur(8px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            padding: 6px 14px;
-            border-radius: 20px;
-            font-size: 13px;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background-color: #f59e0b; /* Loading state */
-        }
-
-        .status-dot.ready { background-color: #10b981; }
-        .status-dot.recording { background-color: #ef4444; animation: pulse 1s infinite; }
-
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.3; }
-            100% { opacity: 1; }
-        }
-
-        /* Viewport Canvas Container */
-        .viewport {
-            position: relative;
-            flex: 1;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background-color: #000;
-            overflow: hidden;
-        }
-
-        video, canvas {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        /* Bottom Controls Bar */
-        .controls {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            z-index: 20;
-            padding: 24px;
-            display: flex;
-            justify-content: space-around;
-            align-items: center;
-            background: linear-gradient(0deg, rgba(15, 23, 42, 0.9) 0%, rgba(15, 23, 42, 0) 100%);
-        }
-
-        .btn-icon {
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            background: rgba(30, 41, 59, 0.8);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            color: #fff;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .btn-icon:active {
-            transform: scale(0.92);
-            background: rgba(51, 65, 85, 0.9);
-        }
-
-        .btn-shutter {
-            width: 76px;
-            height: 76px;
-            border-radius: 50%;
-            border: 4px solid #fff;
-            background: transparent;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            cursor: pointer;
-            padding: 4px;
-            transition: all 0.2s ease;
-        }
-
-        .btn-shutter-inner {
-            width: 100%;
-            height: 100%;
-            border-radius: 50%;
-            background: #fff;
-            transition: all 0.2s ease;
-        }
-
-        .btn-shutter.recording .btn-shutter-inner {
-            background: #ef4444;
-            border-radius: 8px;
-            transform: scale(0.6);
-        }
-
-        /* Mode Selector Tab */
-        .mode-selector {
-            position: absolute;
-            bottom: 110px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 20;
-            display: flex;
-            background: rgba(15, 23, 42, 0.7);
-            backdrop-filter: blur(10px);
-            padding: 4px;
-            border-radius: 20px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            gap: 4px;
-        }
-
-        .mode-btn {
-            padding: 6px 16px;
-            border-radius: 16px;
-            font-size: 12px;
-            font-weight: 600;
-            background: transparent;
-            color: #94a3b8;
-            border: none;
-            cursor: pointer;
-        }
-
-        .mode-btn.active {
-            background: #3b82f6;
-            color: #fff;
-        }
-
-        /* Toast Notifications */
-        .toast {
-            position: absolute;
-            top: 70px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 30;
-            background: rgba(15, 23, 42, 0.9);
-            border: 1px solid #3b82f6;
-            color: #fff;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 13px;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.3s ease;
-        }
-
-        .toast.show { opacity: 1; }
-    </style>
-</head>
-<body>
-
-    <!-- Header Status Bar -->
-    <div class="header">
-        <div class="status-badge">
-            <span class="status-dot" id="statusDot"></span>
-            <span id="statusText">Modeller Yükleniyor...</span>
-        </div>
-        <div class="status-badge">
-            <span id="faceCountText">Kayıtlı Yüz: 0</span>
-        </div>
-    </div>
-
-    <!-- Main Viewport -->
-    <div class="viewport">
-        <video id="webcam" autoplay playsinline muted></video>
-        <canvas id="outputCanvas"></canvas>
-    </div>
-
-    <!-- Mode Toggle Switch -->
-    <div class="mode-selector">
-        <button class="mode-btn active" id="modePhotoBtn" onclick="setMode('photo')">FOTOĞRAF</button>
-        <button class="mode-btn" id="modeVideoBtn" onclick="setMode('video')">CANLI VİDEO (720p)</button>
-    </div>
-
-    <!-- Controls -->
-    <div class="controls">
-        <!-- Switch Camera Button -->
-        <button class="btn-icon" onclick="switchCamera()" title="Kamera Değiştir">
-            <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-        </button>
-
-        <!-- Main Shutter Button -->
-        <div class="btn-shutter" id="shutterBtn" onclick="handleShutter()">
-            <div class="btn-shutter-inner" id="shutterInner"></div>
-        </div>
-
-        <!-- Add Known Face Button -->
-        <button class="btn-icon" onclick="addKnownFace()" title="Tanıdık Ekle">
-            <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg>
-        </button>
-
-        <!-- Clear Known Faces Button -->
-        <button class="btn-icon" onclick="clearKnownFaces()" title="Kayıtları Sıfırla" style="color: #f87171;">
-            <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-        </button>
-    </div>
-
-    <!-- Toast UI -->
-    <div class="toast" id="toast"></div>
-
-    <script>
-        // System Global State Variables
-        let videoElement = document.getElementById('webcam');
-        let canvasElement = document.getElementById('outputCanvas');
-        let ctx = canvasElement.getContext('2d');
-        
-        let currentMode = 'photo'; // 'photo' | 'video'
-        let isRecording = false;
-        let mediaRecorder = null;
-        let recordedChunks = [];
-        let currentFacingMode = 'user'; // 'user' | 'environment'
-        
-        let isModelsLoaded = false;
-        let labeledDescriptors = [];
-        let faceMatcher = null;
-
-        // Optimization: 2-Frame Skip Variables
-        let frameCount = 0;
-        let lastDetections = [];
-
-        // Load TensorFlow.js Face-API Models Offline/Locally
+<!-- ... existing code ... -->
+        // Load AI Models with Robust Fallback Strategy
         async function loadAIModels() {
-            try {
-                // Reliable CDN URL containing official face-api.js weights
-                const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
-                showToast("Yapay zekâ modelleri yükleniyor...");
+            const LOCAL_MODEL_URL = './models';
+            const FALLBACK_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
+            try {
+                // Try loading from local /models folder with a fast timeout check
                 await Promise.all([
-                    faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
-                    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+                    faceapi.nets.ssdMobilenetv1.loadFromUri(LOCAL_MODEL_URL),
+                    faceapi.nets.faceLandmark68Net.loadFromUri(LOCAL_MODEL_URL),
+                    faceapi.nets.faceRecognitionNet.loadFromUri(LOCAL_MODEL_URL)
                 ]);
 
                 isModelsLoaded = true;
-                document.getElementById('statusDot').classList.add('ready');
+                document.getElementById('statusDot').className = 'status-dot ready';
                 document.getElementById('statusText').innerText = "Sistem Hazır";
-                showToast("Modeller başarıyla yüklendi!");
-
-                loadSavedFacesFromStorage();
-                startCamera();
+                showToast("Yapay Zekâ Hazır!");
             } catch (err) {
-                console.error("Model yükleme hatası:", err);
-                document.getElementById('statusText').innerText = "Model Yükleme Hatası!";
-                showToast("Modeller yüklenirken bir hata oluştu.");
+                console.warn("Yerel modeller bulunamadı, CDN deneniyor...", err);
+                try {
+                    await Promise.all([
+                        faceapi.nets.ssdMobilenetv1.loadFromUri(FALLBACK_URL),
+                        faceapi.nets.faceLandmark68Net.loadFromUri(FALLBACK_URL),
+                        faceapi.nets.faceRecognitionNet.loadFromUri(FALLBACK_URL)
+                    ]);
+                    isModelsLoaded = true;
+                    document.getElementById('statusDot').className = 'status-dot ready';
+                    document.getElementById('statusText').innerText = "Sistem Hazır (CDN)";
+                    showToast("CDN Modelleri Yüklendi!");
+                } catch (fallbackErr) {
+                    console.error("Model yükleme hatası:", fallbackErr);
+                    document.getElementById('statusText').innerText = "Model Yükleme Hatası";
+                    showToast("Model dosyaları okunamadı!");
+                }
             }
+
+            loadSavedFacesFromStorage();
         }
 
-        // Start Stream with 720p @ 24 FPS Optimization Constraints
-<!-- ... existing code -->
+        // Mobile-Optimized Camera Stream Initialization
+        async function startCamera() {
+            try {
+                if (window.stream) {
+                    window.stream.getTracks().forEach(track => track.stop());
+                }
+
+                // Video constraints optimized for mobile devices
+                const constraints = {
+                    audio: false,
+                    video: {
+                        facingMode: currentFacingMode,
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                window.stream = stream;
+                videoElement.srcObject = stream;
+
+                videoElement.setAttribute('playsinline', 'true');
+                videoElement.setAttribute('muted', 'true');
+
+                await videoElement.play();
+
+                const updateCanvasDimensions = () => {
+                    if (videoElement.videoWidth && videoElement.videoHeight) {
+                        canvasElement.width = videoElement.videoWidth;
+                        canvasElement.height = videoElement.videoHeight;
+                    }
+                };
+
+                updateCanvasDimensions();
+                videoElement.onloadedmetadata = updateCanvasDimensions;
+                videoElement.onresize = updateCanvasDimensions;
+
+                requestAnimationFrame(processLoop);
+            } catch (err) {
+                console.error("Kamera başlatılamadı:", err);
+                showToast("Kamera izni reddedildi!");
+                document.getElementById('statusText').innerText = "Kamera İzni Yok";
+            }
+        }
+<!-- ... existing code ... -->
+        // App Initialization: Start Camera immediately to trigger permission popup, then load AI
+        window.onload = () => {
+            startCamera();
+            loadAIModels();
+        };
+    </script>
+</body>
+</html>
