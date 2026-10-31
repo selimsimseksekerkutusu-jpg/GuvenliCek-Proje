@@ -1,54 +1,48 @@
-const CACHE_NAME = 'güvenli_çekim_v2';
-
-
-// 1. Sadece ana iskeleti baştan yükle
-const staticAssets = [
-  './',
+const CACHE_NAME = 'guvenli-cek-v3';
+const ASSETS_TO_CACHE = [
   './index.html',
-  './face-api.min.js',
-  './manifest.json'
+  './manifest.json',
+  './models/ssd_mobilenetv1_model-weights_manifest.json',
+  './models/ssd_mobilenetv1_model-shard1',
+  './models/face_landmark_68_model-weights_manifest.json',
+  './models/face_landmark_68_model-shard1',
+  './models/face_recognition_model-weights_manifest.json',
+  './models/face_recognition_model-shard1',
+  './models/face_recognition_model-shard2'
 ];
 
-self.addEventListener('install', async event => {
-  const cache = await caches.open(CACHE_NAME);
-  await cache.addAll(staticAssets);
-  return self.skipWaiting();
+self.addEventListener('install', (evt) => {
+  evt.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.addAll(ASSETS_TO_CACHE);
+    })
+  );
+  self.skipWaiting();
 });
 
-self.addEventListener('activate', event => {
+self.addEventListener('activate', (evt) => {
+  evt.waitUntil(
+    caches.keys().then((keys) => {
+      return Promise.all(
+        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+      );
+    })
+  );
   self.clients.claim();
 });
 
-// 2. İSTEK YAKALAMA (En Önemli Kısım)
-self.addEventListener('fetch', event => {
-  const req = event.request;
-  
-  // Sadece bizim sitemizden gelen ve 'http' ile başlayan istekleri yakala
-  if (!req.url.startsWith('http')) return;
+self.addEventListener('fetch', (evt) => {
+  if (evt.request.method !== 'GET') return;
 
-  event.respondWith(cacheFirst(req));
+  evt.respondWith(
+    caches.match(evt.request).then((cacheRes) => {
+      return cacheRes || fetch(evt.request).then((fetchRes) => {
+        if (fetchRes.status === 200 && evt.request.url.startsWith(self.location.origin)) {
+          const resClone = fetchRes.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(evt.request, resClone));
+        }
+        return fetchRes;
+      });
+    })
+  );
 });
-
-async function cacheFirst(req) {
-  // A. Önce hafızaya (Cache) bak
-  const cache = await caches.open(CACHE_NAME);
-  const cachedResponse = await cache.match(req);
-
-  if (cachedResponse) {
-    return cachedResponse; // Hafızada varsa hemen ver (İnternetsiz çalışır)
-  }
-
-  // B. Hafızada yoksa internetten çek
-  try {
-    const networkResponse = await fetch(req);
-    
-    // C. İnternetten geleni hemen hafızaya kopyala (Gelecek sefer için)
-    cache.put(req, networkResponse.clone());
-    
-    return networkResponse;
-  } catch (error) {
-    // İnternet yoksa ve cache'de de yoksa hata döner
-    console.log("İnternet yok ve dosya cache'de bulunamadı:", req.url);
-    throw error;
-  }
-}
