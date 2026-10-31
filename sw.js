@@ -1,4 +1,4 @@
-const CACHE_NAME = 'guvenli-cek-v4';
+const CACHE_NAME = 'guvenli-cek-v5';
 
 // Core local assets required for full offline capability
 const ASSETS_TO_CACHE = [
@@ -15,11 +15,13 @@ const ASSETS_TO_CACHE = [
   './models/face_recognition_model-shard2'
 ];
 
-// Install Event: Pre-cache all essential assets
+// Install Event: Robust individual asset caching (won't fail if one asset fails)
 self.addEventListener('install', (evt) => {
   evt.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
+      return Promise.allSettled(
+        ASSETS_TO_CACHE.map((url) => cache.add(url).catch((err) => console.warn('[SW] Failed to cache:', url, err)))
+      );
     })
   );
   self.skipWaiting();
@@ -55,8 +57,8 @@ self.addEventListener('fetch', (evt) => {
           return networkRes;
         })
         .catch(() => {
-          // Offline Fallback: Serve cached index.html
-          return caches.match('./index.html') || caches.match('./');
+          // Fixed Promise chaining fallback for index.html / root
+          return caches.match('./index.html').then((r) => r || caches.match('./'));
         })
     );
     return;
@@ -65,8 +67,12 @@ self.addEventListener('fetch', (evt) => {
   // Strategy 2: Cache-First for JS Libraries, AI Models & Static Assets
   evt.respondWith(
     caches.match(evt.request).then((cacheRes) => {
-      return cacheRes || fetch(evt.request).then((fetchRes) => {
-        if (fetchRes.status === 200) {
+      if (cacheRes) return cacheRes;
+
+      return fetch(evt.request).then((fetchRes) => {
+        // Only cache 200 responses from same-origin or trusted CDN
+        const isAllowedOrigin = requestUrl.origin === self.location.origin || requestUrl.origin.includes('cdn.jsdelivr.net');
+        if (fetchRes.status === 200 && isAllowedOrigin) {
           const resClone = fetchRes.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(evt.request, resClone));
         }
@@ -74,6 +80,12 @@ self.addEventListener('fetch', (evt) => {
       });
     }).catch((err) => {
       console.warn('[SW] Offline Fetch Failed:', evt.request.url, err);
+      // Return explicit 503 response instead of undefined
+      return new Response('Offline Resource Unavailable', {
+        status: 503,
+        statusText: 'Service Unavailable',
+        headers: new Headers({ 'Content-Type': 'text/plain' })
+      });
     })
   );
 });
