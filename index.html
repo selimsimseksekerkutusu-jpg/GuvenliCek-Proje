@@ -17,7 +17,7 @@
             --ios-red: #FF3B30;
             --ios-green: #30D158;
             --text-primary: #FFFFFF;
-            --text-secondary: rgba(235, 235, 245, 0.6);
+            --text-secondary: rgba(235, 235, 245, 0.65);
         }
 
         * {
@@ -887,99 +887,40 @@
         })();
 
         let isModelsLoaded = false;
+        let isTinyDetectorLoaded = false;
         let isDetecting = false;
+        let isRenderLoopRunning = false;
         let showFaceBlocks = true; // Controls live "Tanınmayan Kişi" block visibility
-        let cameraMode = 'photo'; // 'photo' | 'video'
         let currentFacingMode = 'user';
-        let targetFps = 30; // Default 30 FPS; unlocks 60 FPS and up to 60/sn scan rates when toggled
+        let cameraMode = 'photo'; // 'photo' or 'video'
+        let targetFps = 30; // Default 30 FPS; unlocks 45/sn and 60/sn when set to 60 FPS
 
-        // Scan Rate Options: 45/sn and 60/sn unlock only when 60 FPS mode is active
         const BASE_SCAN_RATES = [2, 5, 10, 15, 20, 30];
         const HIGH_SCAN_RATES = [2, 5, 10, 15, 20, 30, 45, 60];
         let scanRateIndex = 2; // Default: 10/sn
+        const STRICT_MATCH_THRESHOLD = 0.47; // Stricter Euclidean distance prevents strangers from matching trusted faces
 
         let savedLabeledDescriptors = [];
         let faceMatcher = null;
         let trackedFaces = []; // Predictive velocity + smoothed oval tracker for locked-on blur
         let nextTrackId = 1;
         let lastInferenceMs = 90; // Tracks actual mobile AI inference duration to prevent flicker
-        let identityCache = []; // Spatial cache to avoid re-running heavy 128D recognition every tick
         let lastRenderedVideoTime = -1;
         let lastRenderTimestamp = 0;
 
+        // Video Recording State
         let mediaRecorder = null;
         let recordedChunks = [];
         let isRecording = false;
         let recordingStartTime = 0;
         let recordingTimerInterval = null;
-        let lastCapturedMedia = null;
+
+        // Last Captured Media State
+        let lastCapturedMedia = null; // { type: 'photo' | 'video', url: string, thumbUrl: string, filename: string }
         let toastTimeout = null;
 
-        // ==================== UI & SETTINGS CONTROLS ====================
-        function showToast(message) {
-            const toast = document.getElementById('toast');
-            toast.innerText = message;
-            toast.classList.add('show');
-            clearTimeout(toastTimeout);
-            toastTimeout = setTimeout(() => {
-                toast.classList.remove('show');
-            }, 2200);
-        }
-
-        function getAvailableScanRates() {
-            return targetFps === 60 ? HIGH_SCAN_RATES : BASE_SCAN_RATES;
-        }
-
-        function changeScanRate(delta) {
-            const rates = getAvailableScanRates();
-            scanRateIndex = Math.max(0, Math.min(rates.length - 1, scanRateIndex + delta));
-            const currentRate = rates[scanRateIndex];
-            document.getElementById('scanRateLabel').innerText = `${currentRate}/sn`;
-            showToast(`Okuma hızı: ${currentRate} okuma/sn`);
-        }
-
-        async function toggleTargetFps() {
-            if (isRecording) {
-                showToast('Kayıt sırasında FPS değiştirilemez');
-                return;
-            }
-
-            targetFps = targetFps === 30 ? 60 : 30;
-            const fpsBtn = document.getElementById('fpsToggleBtn');
-            fpsBtn.innerText = `${targetFps} FPS`;
-            fpsBtn.classList.toggle('active', targetFps === 60);
-
-            // Clamp scan rate back to max 30/sn when switching down to 30 FPS
-            const rates = getAvailableScanRates();
-            if (scanRateIndex >= rates.length) {
-                scanRateIndex = rates.length - 1;
-            }
-            document.getElementById('scanRateLabel').innerText = `${rates[scanRateIndex]}/sn`;
-
-            showToast(targetFps === 60 ? '60 FPS Aktif (45/sn ve 60/sn açıldı)' : '30 FPS Modu');
-            await startCamera();
-        }
-
-        function toggleFaceBlocks() {
-            showFaceBlocks = !showFaceBlocks;
-            const btn = document.getElementById('blockToggleBtn');
-            btn.classList.toggle('active', showFaceBlocks);
-            showToast(showFaceBlocks ? 'Canlı yüz çerçeveleri açık' : 'Canlı yüz çerçeveleri gizli');
-        }
-
-        function setCameraMode(mode) {
-            if (isRecording) {
-                showToast('Önce aktif kaydı durdurun');
-                return;
-            }
-            cameraMode = mode;
-            document.getElementById('modePhotoBtn').classList.toggle('active', mode === 'photo');
-            document.getElementById('modeVideoBtn').classList.toggle('active', mode === 'video');
-            document.getElementById('shutterBtn').classList.toggle('video-mode', mode === 'video');
-        }
-
-        // ==================== LIBRARY & AI MODEL LOADING ====================
-        function loadScriptUrl(src) {
+        // ==================== SCRIPT & AI MODEL LOADER ====================
+        function loadScriptTag(src) {
             return new Promise((resolve, reject) => {
                 const script = document.createElement('script');
                 script.src = src;
@@ -993,9 +934,9 @@
         async function ensureFaceApiLoaded() {
             if (window.faceapi) return;
             try {
-                await loadScriptUrl('./face-api.min.js');
+                await loadScriptTag('./face-api.min.js');
             } catch {
-                await loadScriptUrl('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js');
+                await loadScriptTag('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js');
             }
         }
 
@@ -1006,10 +947,9 @@
             const FALLBACK_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
             try {
-                statusText.innerText = 'Motor Yükleniyor...';
+                statusText.innerText = 'Yapay Zekâ Yükleniyor...';
                 await ensureFaceApiLoaded();
 
-                statusText.innerText = 'Modeller Yükleniyor...';
                 try {
                     await Promise.all([
                         faceapi.nets.ssdMobilenetv1.loadFromUri(LOCAL_MODEL_URL),
@@ -1025,6 +965,19 @@
                     ]);
                 }
 
+                // Load TinyFaceDetector in parallel for distant/small faces (non-blocking fallback)
+                try {
+                    await faceapi.nets.tinyFaceDetector.loadFromUri(LOCAL_MODEL_URL);
+                    isTinyDetectorLoaded = true;
+                } catch {
+                    try {
+                        await faceapi.nets.tinyFaceDetector.loadFromUri(FALLBACK_URL);
+                        isTinyDetectorLoaded = true;
+                    } catch {
+                        isTinyDetectorLoaded = false;
+                    }
+                }
+
                 isModelsLoaded = true;
                 statusDot.className = 'status-dot ready';
                 statusText.innerText = 'BlurKayıt Hazır';
@@ -1034,48 +987,38 @@
                 console.error('Model yükleme hatası:', err);
                 statusDot.className = 'status-dot error';
                 statusText.innerText = 'Model Hatası';
-                showToast('Yapay zekâ modelleri yüklenemedi!');
+                showToast('Yapay zekâ modelleri yüklenemedi');
             }
         }
 
-        // ==================== CAMERA INITIALIZATION ====================
+        // ==================== CAMERA INITIALIZATION & FPS CONTROLS ====================
         async function startCamera() {
-            const overlay = document.getElementById('startOverlay');
+            const startOverlay = document.getElementById('startOverlay');
             try {
                 if (window.stream) {
                     window.stream.getTracks().forEach(track => track.stop());
                 }
 
                 const constraints = {
-                    audio: true,
+                    audio: false,
                     video: {
                         facingMode: currentFacingMode,
                         width: { ideal: 1280 },
                         height: { ideal: 720 },
-                        frameRate: { ideal: targetFps, max: targetFps }
+                        frameRate: { ideal: targetFps, max: 60 }
                     }
                 };
 
-                let stream;
-                try {
-                    stream = await navigator.mediaDevices.getUserMedia(constraints);
-                } catch {
-                    // Fallback without microphone if audio permission is denied
-                    stream = await navigator.mediaDevices.getUserMedia({
-                        audio: false,
-                        video: constraints.video
-                    });
-                }
-
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 window.stream = stream;
                 videoElement.srcObject = stream;
                 videoElement.setAttribute('playsinline', 'true');
                 videoElement.setAttribute('muted', 'true');
 
                 await videoElement.play();
-                overlay.classList.add('hidden');
+                startOverlay.classList.add('hidden');
 
-                const syncDimensions = () => {
+                const syncCanvasDimensions = () => {
                     if (videoElement.videoWidth && videoElement.videoHeight) {
                         cleanCanvas.width = videoElement.videoWidth;
                         cleanCanvas.height = videoElement.videoHeight;
@@ -1084,15 +1027,66 @@
                     }
                 };
 
-                syncDimensions();
-                videoElement.onloadedmetadata = syncDimensions;
-                videoElement.onresize = syncDimensions;
+                syncCanvasDimensions();
+                videoElement.onloadedmetadata = syncCanvasDimensions;
+                videoElement.onresize = syncCanvasDimensions;
+
+                if (!isRenderLoopRunning) {
+                    isRenderLoopRunning = true;
+                    requestAnimationFrame(renderLoop);
+                }
             } catch (err) {
-                console.error('Kamera başlatılamadı:', err);
-                overlay.classList.remove('hidden');
-                document.getElementById('statusDot').className = 'status-dot error';
-                document.getElementById('statusText').innerText = 'Kamera İzni Yok';
+                console.error('Kamera başlatma hatası:', err);
+                startOverlay.classList.remove('hidden');
+                showToast('Kamera izni gerekli');
             }
+        }
+
+        function getAvailableScanRates() {
+            return targetFps === 60 ? HIGH_SCAN_RATES : BASE_SCAN_RATES;
+        }
+
+        function updateScanRateUI() {
+            const rates = getAvailableScanRates();
+            if (scanRateIndex >= rates.length) {
+                scanRateIndex = rates.length - 1;
+            }
+            document.getElementById('scanRateLabel').innerText = `${rates[scanRateIndex]}/sn`;
+        }
+
+        function changeScanRate(delta) {
+            const rates = getAvailableScanRates();
+            const nextIdx = Math.max(0, Math.min(rates.length - 1, scanRateIndex + delta));
+            if (nextIdx !== scanRateIndex) {
+                scanRateIndex = nextIdx;
+                updateScanRateUI();
+                showToast(`Okuma hızı: ${rates[scanRateIndex]}/sn`);
+            }
+        }
+
+        async function toggleTargetFps() {
+            if (isRecording) {
+                showToast('Kayıt sırasında FPS değiştirilemez');
+                return;
+            }
+            targetFps = targetFps === 30 ? 60 : 30;
+            const fpsBtn = document.getElementById('fpsToggleBtn');
+            fpsBtn.innerText = `${targetFps} FPS`;
+            fpsBtn.classList.toggle('active', targetFps === 60);
+
+            updateScanRateUI();
+            showToast(targetFps === 60 ? '60 FPS Aktif (45/sn ve 60/sn açıldı)' : '30 FPS Modu');
+
+            if (window.stream) {
+                await startCamera();
+            }
+        }
+
+        function toggleFaceBlocks() {
+            showFaceBlocks = !showFaceBlocks;
+            const btn = document.getElementById('blockToggleBtn');
+            btn.classList.toggle('active', showFaceBlocks);
+            showToast(showFaceBlocks ? 'Kişi çerçeveleri açık' : 'Kişi çerçeveleri gizli');
         }
 
         async function switchCamera() {
@@ -1102,82 +1096,169 @@
             }
             currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
             trackedFaces = [];
-            identityCache = [];
             lastRenderedVideoTime = -1;
             await startCamera();
         }
 
-        // ==================== AI DETECTION & IDENTITY CACHE ====================
+        // ==================== HYBRID AI DETECTION & HIGH-ACCURACY IDENTITY ====================
+        function computeBoxIoU(a, b) {
+            const x1 = Math.max(a.x, b.x);
+            const y1 = Math.max(a.y, b.y);
+            const x2 = Math.min(a.x + a.width, b.x + b.width);
+            const y2 = Math.min(a.y + a.height, b.y + b.height);
+            const interArea = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+            if (interArea <= 0) return 0;
+            const unionArea = a.width * a.height + b.width * b.height - interArea;
+            return unionArea > 0 ? interArea / unionArea : 0;
+        }
+
+        // Filters out false-positive noise boxes (abnormal aspect ratios or sub-pixel artifacts)
+        function isValidFaceBox(box, frameW, frameH) {
+            if (!box || box.width < 22 || box.height < 22) return false;
+            if (box.width > frameW * 0.96 || box.height > frameH * 0.96) return false;
+            const aspect = box.width / box.height;
+            return aspect >= 0.42 && aspect <= 1.85;
+        }
+
+        // Combines SsdMobilenetv1 (close/angled faces) + TinyFaceDetector (small/distant faces) with NMS
+        async function detectHybridFaces() {
+            const frameW = videoElement.videoWidth || 640;
+            const frameH = videoElement.videoHeight || 480;
+
+            const ssdOptions = new faceapi.SsdMobilenetv1Options({
+                minConfidence: 0.30,
+                maxResults: 15
+            });
+
+            const tasks = [
+                faceapi.detectAllFaces(videoElement, ssdOptions).withFaceLandmarks()
+            ];
+
+            if (isTinyDetectorLoaded) {
+                const tinyOptions = new faceapi.TinyFaceDetectorOptions({
+                    inputSize: 416,
+                    scoreThreshold: 0.38
+                });
+                tasks.push(
+                    faceapi.detectAllFaces(videoElement, tinyOptions).withFaceLandmarks()
+                );
+            }
+
+            const results = await Promise.all(tasks);
+            const combined = [];
+
+            for (const det of results[0]) {
+                if (isValidFaceBox(det.detection.box, frameW, frameH)) {
+                    combined.push(det);
+                }
+            }
+
+            if (results[1]) {
+                for (const tinyDet of results[1]) {
+                    const box = tinyDet.detection.box;
+                    if (!isValidFaceBox(box, frameW, frameH)) continue;
+                    const duplicate = combined.some(existing => computeBoxIoU(existing.detection.box, box) > 0.38);
+                    if (!duplicate) {
+                        combined.push(tinyDet);
+                    }
+                }
+            }
+
+            return combined;
+        }
+
+        function findBestMatchingTrack(mappedCx, mappedCy, boxWidth, boxHeight) {
+            let bestTrack = null;
+            let bestScore = Infinity;
+
+            for (const track of trackedFaces) {
+                const dist = Math.hypot(mappedCx - track.cx, mappedCy - track.cy);
+                const maxRadius = Math.max(track.width, boxWidth) * 1.1;
+                if (dist > maxRadius) continue;
+
+                const sizeRatio = Math.max(track.width, boxWidth) / Math.max(1, Math.min(track.width, boxWidth));
+                if (sizeRatio > 1.85) continue;
+
+                const score = dist + (sizeRatio - 1) * 40;
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestTrack = track;
+                }
+            }
+            return bestTrack;
+        }
+
         async function detectionLoop() {
             if (isModelsLoaded && !isDetecting && videoElement.readyState >= 2) {
                 isDetecting = true;
                 try {
                     const inferStart = performance.now();
-                    // Lower minConfidence (0.22) keeps angled, half, and partial profile faces locked
-                    const detectorOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.22 });
+                    const detections = await detectHybridFaces();
+                    const detectedAt = performance.now();
+                    lastInferenceMs = Math.min(650, Math.max(20, detectedAt - inferStart));
 
-                    if (savedLabeledDescriptors.length > 0 && faceMatcher) {
-                        const detections = await faceapi
-                            .detectAllFaces(videoElement, detectorOptions)
-                            .withFaceLandmarks();
+                    const w = cleanCanvas.width || videoElement.videoWidth || 640;
+                    const isFront = currentFacingMode === 'user';
+                    const hasSavedFaces = savedLabeledDescriptors.length > 0 && faceMatcher !== null;
+                    const evaluated = [];
 
-                        const detectedAt = performance.now();
-                        lastInferenceMs = Math.min(650, Math.max(20, detectedAt - inferStart));
+                    for (const det of detections) {
+                        const box = det.detection.box;
+                        const rawCx = box.x + box.width * 0.5;
+                        const mappedCx = isFront ? w - rawCx : rawCx;
+                        const mappedCy = box.y + box.height * 0.52;
 
-                        const evaluated = [];
-                        for (const det of detections) {
-                            const box = det.detection.box;
-                            const cx = box.x + box.width * 0.5;
-                            const cy = box.y + box.height * 0.5;
+                        const existingTrack = findBestMatchingTrack(mappedCx, mappedCy, box.width, box.height);
 
-                            // Check spatial identity cache (within 450ms & 50px) to save mobile CPU
-                            const cached = identityCache.find(
-                                entry => (detectedAt - entry.timestamp) < 450 && Math.hypot(entry.cx - cx, entry.cy - cy) < 50
-                            );
-
-                            if (cached) {
-                                cached.cx = cx;
-                                cached.cy = cy;
-                                evaluated.push({
-                                    box,
-                                    landmarks: det.landmarks,
-                                    label: cached.label,
-                                    isTrusted: cached.isTrusted
-                                });
-                            } else {
-                                const fullDet = await faceapi.computeFaceDescriptor(videoElement, det);
-                                const bestMatch = faceMatcher.findBestMatch(fullDet);
-                                const isTrusted = bestMatch.label !== 'unknown';
-                                const label = isTrusted ? bestMatch.label : 'Tanınmayan Kişi';
-
-                                identityCache.push({ cx, cy, label, isTrusted, timestamp: detectedAt });
-                                evaluated.push({
-                                    box,
-                                    landmarks: det.landmarks,
-                                    label,
-                                    isTrusted
-                                });
-                            }
+                        if (!hasSavedFaces) {
+                            evaluated.push({
+                                box,
+                                landmarks: det.landmarks,
+                                label: 'Tanınmayan Kişi',
+                                isTrusted: false,
+                                trustedStreak: 0
+                            });
+                            continue;
                         }
-                        identityCache = identityCache.filter(entry => (detectedAt - entry.timestamp) < 500);
-                        updateTrackedFaces(evaluated, detectedAt);
-                    } else {
-                        // Fast path when no trusted faces are saved: skips heavy 128D recognition model
-                        const detections = await faceapi
-                            .detectAllFaces(videoElement, detectorOptions)
-                            .withFaceLandmarks();
 
-                        const detectedAt = performance.now();
-                        lastInferenceMs = Math.min(650, Math.max(20, detectedAt - inferStart));
+                        // Re-verify identity every 260ms or immediately on any new/untrusted track
+                        const needsVerification =
+                            !existingTrack ||
+                            !existingTrack.isTrusted ||
+                            (detectedAt - (existingTrack.lastVerifiedAt || 0)) > 260;
 
-                        const evaluated = detections.map(det => ({
-                            box: det.detection.box,
-                            landmarks: det.landmarks,
-                            label: 'Tanınmayan Kişi',
-                            isTrusted: false
-                        }));
-                        updateTrackedFaces(evaluated, detectedAt);
+                        if (needsVerification) {
+                            const descriptor = await faceapi.computeFaceDescriptor(videoElement, det);
+                            const bestMatch = faceMatcher.findBestMatch(descriptor);
+                            const rawMatched = bestMatch.label !== 'unknown' && bestMatch.distance <= STRICT_MATCH_THRESHOLD;
+
+                            const prevStreak = existingTrack ? (existingTrack.trustedStreak || 0) : 0;
+                            const nextStreak = rawMatched ? prevStreak + 1 : 0;
+
+                            // Privacy-first hysteresis: require 2 consecutive matches (or ultra-close <= 0.40) to unblur
+                            const confirmedTrusted = rawMatched && (nextStreak >= 2 || bestMatch.distance <= 0.40);
+
+                            evaluated.push({
+                                box,
+                                landmarks: det.landmarks,
+                                label: confirmedTrusted ? bestMatch.label : 'Tanınmayan Kişi',
+                                isTrusted: confirmedTrusted,
+                                trustedStreak: nextStreak,
+                                lastVerifiedAt: detectedAt
+                            });
+                        } else {
+                            evaluated.push({
+                                box,
+                                landmarks: det.landmarks,
+                                label: existingTrack.label,
+                                isTrusted: existingTrack.isTrusted,
+                                trustedStreak: existingTrack.trustedStreak || 2,
+                                lastVerifiedAt: existingTrack.lastVerifiedAt
+                            });
+                        }
                     }
+
+                    updateTrackedFaces(evaluated, detectedAt);
                 } catch (err) {
                     console.error('Algılama hatası:', err);
                 } finally {
@@ -1191,24 +1272,24 @@
             setTimeout(detectionLoop, intervalMs);
         }
 
-        // ==================== PREDICTIVE TRACKING & GAUSSIAN BLUR ====================
+        // ==================== PREDICTIVE TRACKING & HEAVY GAUSSIAN BLUR ====================
         // Dynamic hold duration adapts to scan rate + mobile inference latency so blur never blinks
         function getTrackHoldMs() {
             const rates = getAvailableScanRates();
             const currentRate = rates[Math.min(scanRateIndex, rates.length - 1)];
             const scanIntervalMs = 1000 / currentRate;
-            return Math.min(1150, Math.max(420, scanIntervalMs * 2.3 + lastInferenceMs * 1.4));
+            return Math.min(1150, Math.max(440, scanIntervalMs * 2.3 + lastInferenceMs * 1.4));
         }
 
-        // Computes an anatomical oval restricted strictly to the face region (forehead to chin, cheek to cheek)
+        // Computes a full-coverage anatomical face oval (forehead to chin, ear-to-ear cheek margin)
         function computeFaceOval(item, canvasWidth, isFront) {
             const box = item.box;
             const rawCx = box.x + box.width * 0.5;
-            const rawCy = box.y + box.height * 0.52;
+            const rawCy = box.y + box.height * 0.50;
             const cx = isFront ? canvasWidth - rawCx : rawCx;
             let cy = rawCy;
-            let rx = box.width * 0.44;
-            let ry = box.height * 0.52;
+            let rx = box.width * 0.52;
+            let ry = box.height * 0.58;
             let angle = 0;
 
             if (item.landmarks && item.landmarks.positions && item.landmarks.positions.length >= 68) {
@@ -1230,17 +1311,17 @@
                 angle = Math.atan2(dy, dx);
                 if (isFront) angle = -angle;
 
-                // Center oval tightly between forehead/brows and chin
+                // Center oval across forehead, eyes, nose, mouth, and chin
                 const faceCenterX = (eyeMidX + chin.x + browMidX) / 3;
-                const faceCenterY = (browMidY * 0.42 + eyeMidY * 0.18 + chin.y * 0.40);
+                const faceCenterY = (browMidY * 0.44 + eyeMidY * 0.16 + chin.y * 0.40);
                 const mappedCx = isFront ? canvasWidth - faceCenterX : faceCenterX;
 
                 const cheekDist = Math.hypot(rightCheek.x - leftCheek.x, rightCheek.y - leftCheek.y);
                 const verticalSpan = Math.hypot(chin.x - browMidX, chin.y - browMidY);
 
                 cy = faceCenterY;
-                rx = Math.max(box.width * 0.34, cheekDist * 0.52);
-                ry = Math.max(box.height * 0.42, verticalSpan * 0.66);
+                rx = Math.max(box.width * 0.46, cheekDist * 0.60);
+                ry = Math.max(box.height * 0.52, verticalSpan * 0.76);
 
                 return { cx: mappedCx, cy, rx, ry, angle };
             }
@@ -1269,11 +1350,13 @@
                     angle: oval.angle,
                     label: item.label,
                     isTrusted: item.isTrusted,
+                    trustedStreak: item.trustedStreak || 0,
+                    lastVerifiedAt: item.lastVerifiedAt || 0,
                     matched: false
                 };
             });
 
-            // Match existing tracks to compute smoothed velocity for zero-lag predictive follow
+            // Match existing tracks to compute clamped velocity for zero-lag predictive follow
             for (const track of trackedFaces) {
                 let bestIdx = -1;
                 let bestDist = Infinity;
@@ -1281,7 +1364,7 @@
                 for (let i = 0; i < fresh.length; i++) {
                     if (fresh[i].matched) continue;
                     const dist = Math.hypot(fresh[i].cx - track.cx, fresh[i].cy - track.cy);
-                    const maxRadius = Math.max(track.width, fresh[i].width) * 1.15;
+                    const maxRadius = Math.max(track.width, fresh[i].width) * 1.1;
                     if (dist < maxRadius && dist < bestDist) {
                         bestDist = dist;
                         bestIdx = i;
@@ -1292,34 +1375,38 @@
                     const target = fresh[bestIdx];
                     target.matched = true;
 
-                    const dt = Math.max(0.016, Math.min(0.45, (detectedAt - track.lastSeen) / 1000));
-                    const rawVx = (target.cx - track.cx) / dt;
-                    const rawVy = (target.cy - track.cy) / dt;
+                    const dt = Math.max(0.016, Math.min(0.40, (detectedAt - track.lastSeen) / 1000));
+                    const maxSpeed = Math.max(380, target.width * 5.5);
+                    const rawVx = Math.max(-maxSpeed, Math.min(maxSpeed, (target.cx - track.cx) / dt));
+                    const rawVy = Math.max(-maxSpeed, Math.min(maxSpeed, (target.cy - track.cy) / dt));
 
-                    // Smooth velocity to eliminate jitter while keeping head turns locked
-                    track.vx = track.vx * 0.35 + rawVx * 0.65;
-                    track.vy = track.vy * 0.35 + rawVy * 0.65;
+                    // Smooth velocity to prevent overshoot while keeping fast head turns locked
+                    track.vx = track.vx * 0.40 + rawVx * 0.60;
+                    track.vy = track.vy * 0.40 + rawVy * 0.60;
 
-                    track.x = track.x * 0.25 + target.x * 0.75;
-                    track.y = track.y * 0.25 + target.y * 0.75;
-                    track.width = track.width * 0.25 + target.width * 0.75;
-                    track.height = track.height * 0.25 + target.height * 0.75;
-                    track.cx = track.cx * 0.22 + target.cx * 0.78;
-                    track.cy = track.cy * 0.22 + target.cy * 0.78;
-                    track.rx = track.rx * 0.25 + target.rx * 0.75;
-                    track.ry = track.ry * 0.25 + target.ry * 0.75;
-                    track.angle = track.angle * 0.3 + target.angle * 0.7;
+                    track.x = track.x * 0.22 + target.x * 0.78;
+                    track.y = track.y * 0.22 + target.y * 0.78;
+                    track.width = track.width * 0.22 + target.width * 0.78;
+                    track.height = track.height * 0.22 + target.height * 0.78;
+                    track.cx = track.cx * 0.18 + target.cx * 0.82;
+                    track.cy = track.cy * 0.18 + target.cy * 0.82;
+                    track.rx = track.rx * 0.22 + target.rx * 0.78;
+                    track.ry = track.ry * 0.22 + target.ry * 0.78;
+                    track.angle = track.angle * 0.25 + target.angle * 0.75;
                     track.label = target.label;
                     track.isTrusted = target.isTrusted;
+                    track.trustedStreak = target.trustedStreak;
+                    if (target.lastVerifiedAt) {
+                        track.lastVerifiedAt = target.lastVerifiedAt;
+                    }
                     track.lastSeen = detectedAt;
                 } else {
-                    // Gently decay velocity when temporarily coasting between scans
-                    track.vx *= 0.85;
-                    track.vy *= 0.85;
+                    track.vx *= 0.72;
+                    track.vy *= 0.72;
                 }
             }
 
-            // Add newly appeared faces
+            // Add newly appeared faces (always blurred by default until verified)
             for (const item of fresh) {
                 if (!item.matched) {
                     trackedFaces.push({
@@ -1337,6 +1424,8 @@
                         vy: 0,
                         label: item.label,
                         isTrusted: item.isTrusted,
+                        trustedStreak: item.trustedStreak,
+                        lastVerifiedAt: item.lastVerifiedAt,
                         lastSeen: detectedAt
                     });
                 }
@@ -1346,10 +1435,10 @@
             trackedFaces = trackedFaces.filter(track => (detectedAt - track.lastSeen) < holdMs);
         }
 
-        // Applies a lighter, natural Gaussian blur clipped strictly inside the anatomical face oval
+        // Ultra-dense, unidentifiable Gaussian face blur (a notch stronger than the initial version)
         function applyGaussianFaceBlur(ctx, track, predCx, predCy, canvasWidth, canvasHeight) {
             const maxDim = Math.max(track.rx, track.ry) * 2.2;
-            const pad = Math.max(14, maxDim * 0.14);
+            const pad = Math.max(24, maxDim * 0.22);
             const sx = Math.max(0, Math.floor(predCx - track.rx - pad));
             const sy = Math.max(0, Math.floor(predCy - track.ry - pad));
             const sw = Math.min(canvasWidth - sx, Math.ceil((track.rx + pad) * 2));
@@ -1362,263 +1451,280 @@
             ctx.ellipse(predCx, predCy, track.rx, track.ry, track.angle, 0, Math.PI * 2);
             ctx.clip();
 
+            // Stage 1: Heavy spatial downscale smoothing to completely erase fine facial geometry
+            const w1 = Math.max(8, Math.round(sw * 0.055));
+            const h1 = Math.max(8, Math.round(sh * 0.055));
+            const w2 = Math.max(5, Math.round(sw * 0.032));
+            const h2 = Math.max(5, Math.round(sh * 0.032));
+
+            if (blurWorkCanvas.width < sw || blurWorkCanvas.height < sh) {
+                blurWorkCanvas.width = Math.max(blurWorkCanvas.width, sw);
+                blurWorkCanvas.height = Math.max(blurWorkCanvas.height, sh);
+            }
+            if (blurTempCanvas.width < sw || blurTempCanvas.height < sh) {
+                blurTempCanvas.width = Math.max(blurTempCanvas.width, sw);
+                blurTempCanvas.height = Math.max(blurTempCanvas.height, sh);
+            }
+
+            blurWorkCtx.imageSmoothingEnabled = true;
+            blurWorkCtx.imageSmoothingQuality = 'high';
+            blurTempCtx.imageSmoothingEnabled = true;
+            blurTempCtx.imageSmoothingQuality = 'high';
+
+            blurWorkCtx.clearRect(0, 0, w1, h1);
+            blurWorkCtx.drawImage(cleanCanvas, sx, sy, sw, sh, 0, 0, w1, h1);
+
+            blurTempCtx.clearRect(0, 0, w2, h2);
+            blurTempCtx.drawImage(blurWorkCanvas, 0, 0, w1, h1, 0, 0, w2, h2);
+
+            // Stage 2: Smooth Gaussian upscale + hardware Gaussian filter pass
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
             if (supportsCanvasFilter) {
-                // Hardware-accelerated gentle Gaussian blur directly inside face oval
-                ctx.filter = 'blur(8px)';
-                ctx.drawImage(cleanCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
+                const blurRadius = Math.max(18, Math.round(maxDim * 0.11));
+                ctx.filter = `blur(${blurRadius}px)`;
+                ctx.drawImage(blurTempCanvas, 0, 0, w2, h2, sx - 8, sy - 8, sw + 16, sh + 16);
                 ctx.filter = 'none';
             } else {
-                // Fast Safari iOS fallback: smooth 2-pass downscale/upscale without resetting canvas size every frame
-                const w1 = Math.max(18, Math.round(sw * 0.16));
-                const h1 = Math.max(18, Math.round(sh * 0.16));
-                const w2 = Math.max(12, Math.round(sw * 0.10));
-                const h2 = Math.max(12, Math.round(sh * 0.10));
-
-                if (blurWorkCanvas.width < sw || blurWorkCanvas.height < sh) {
-                    blurWorkCanvas.width = Math.max(blurWorkCanvas.width, sw);
-                    blurWorkCanvas.height = Math.max(blurWorkCanvas.height, sh);
-                }
-                if (blurTempCanvas.width < sw || blurTempCanvas.height < sh) {
-                    blurTempCanvas.width = Math.max(blurTempCanvas.width, sw);
-                    blurTempCanvas.height = Math.max(blurTempCanvas.height, sh);
-                }
-
-                blurWorkCtx.imageSmoothingEnabled = true;
-                blurTempCtx.imageSmoothingEnabled = true;
-
-                blurWorkCtx.clearRect(0, 0, w1, h1);
-                blurWorkCtx.drawImage(cleanCanvas, sx, sy, sw, sh, 0, 0, w1, h1);
-
-                blurTempCtx.clearRect(0, 0, w2, h2);
-                blurTempCtx.drawImage(blurWorkCanvas, 0, 0, w1, h1, 0, 0, w2, h2);
-
-                ctx.imageSmoothingEnabled = true;
                 ctx.drawImage(blurTempCanvas, 0, 0, w2, h2, sx, sy, sw, sh);
             }
 
-            // Subtle soft feathered edge inside the face oval
+            // Frosted Gaussian diffusion veil so high-contrast features never bleed through
             const grad = ctx.createRadialGradient(
-                predCx, predCy, Math.min(track.rx, track.ry) * 0.55,
+                predCx, predCy, Math.min(track.rx, track.ry) * 0.25,
                 predCx, predCy, Math.max(track.rx, track.ry)
             );
-            grad.addColorStop(0, 'rgba(255, 255, 255, 0)');
-            grad.addColorStop(1, 'rgba(20, 20, 24, 0.14)');
+            grad.addColorStop(0, 'rgba(20, 20, 25, 0.18)');
+            grad.addColorStop(1, 'rgba(15, 15, 20, 0.30)');
             ctx.fillStyle = grad;
             ctx.fillRect(sx, sy, sw, sh);
 
             ctx.restore();
         }
 
-        // ==================== RENDER LOOP (CLEAN CAPTURE + LIVE OVERLAY) ====================
-        function renderLoop(now) {
-            const minFrameInterval = targetFps === 60 ? 14 : 30;
-            if (now - lastRenderTimestamp >= minFrameInterval) {
-                lastRenderTimestamp = now;
+        // ==================== REAL-TIME VIEWFINDER & CLEAN RECORDING RENDER LOOP ====================
+        function renderLoop(timestamp) {
+            requestAnimationFrame(renderLoop);
 
-                if (videoElement.readyState >= 2 && cleanCanvas.width > 0 && cleanCanvas.height > 0) {
-                    const w = cleanCanvas.width;
-                    const h = cleanCanvas.height;
-                    const isFront = currentFacingMode === 'user';
+            if (videoElement.readyState < 2 || !videoElement.videoWidth) return;
 
-                    // Only redraw video frame when a new video timestamp arrives or active tracks move
-                    if (videoElement.currentTime !== lastRenderedVideoTime || trackedFaces.length > 0) {
-                        lastRenderedVideoTime = videoElement.currentTime;
+            const minFrameInterval = 1000 / (targetFps + 4);
+            if (timestamp - lastRenderTimestamp < minFrameInterval && videoElement.currentTime === lastRenderedVideoTime) {
+                return;
+            }
+            lastRenderTimestamp = timestamp;
+            lastRenderedVideoTime = videoElement.currentTime;
 
-                        // 1. Draw clean camera frame to cleanCanvas (used for saved photos & videos)
-                        cleanCtx.save();
-                        if (isFront) {
-                            cleanCtx.translate(w, 0);
-                            cleanCtx.scale(-1, 1);
-                        }
-                        cleanCtx.drawImage(videoElement, 0, 0, w, h);
-                        cleanCtx.restore();
+            const w = videoElement.videoWidth;
+            const h = videoElement.videoHeight;
 
-                        // 2. Apply predictive Gaussian blur to untrusted faces on cleanCanvas
-                        const currentTime = performance.now();
-                        const predictedTracks = [];
-
-                        for (const track of trackedFaces) {
-                            const ageSec = Math.min(0.28, Math.max(0, (currentTime - track.lastSeen) / 1000));
-                            const predCx = track.cx + track.vx * ageSec;
-                            const predCy = track.cy + track.vy * ageSec;
-                            const predX = track.x + track.vx * ageSec;
-                            const predY = track.y + track.vy * ageSec;
-
-                            predictedTracks.push({
-                                ...track,
-                                predCx,
-                                predCy,
-                                predX,
-                                predY
-                            });
-
-                            if (!track.isTrusted) {
-                                applyGaussianFaceBlur(cleanCtx, track, predCx, predCy, w, h);
-                            }
-                        }
-
-                        // 3. Copy blurred clean frame onto live viewfinder displayCanvas
-                        displayCtx.drawImage(cleanCanvas, 0, 0, w, h);
-
-                        // 4. Draw live bounding boxes & labels ONLY on displayCanvas (never on saved media)
-                        if (showFaceBlocks) {
-                            for (const t of predictedTracks) {
-                                const strokeColor = t.isTrusted ? '#30D158' : '#FFD60A';
-                                displayCtx.save();
-                                displayCtx.strokeStyle = strokeColor;
-                                displayCtx.lineWidth = Math.max(2, Math.round(w * 0.0032));
-                                displayCtx.beginPath();
-                                displayCtx.roundRect(t.predX, t.predY, t.width, t.height, 12);
-                                displayCtx.stroke();
-
-                                const fontSize = Math.max(12, Math.round(w * 0.02));
-                                displayCtx.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
-                                const textWidth = displayCtx.measureText(t.label).width;
-                                const pillW = textWidth + 16;
-                                const pillH = fontSize + 10;
-                                const pillX = Math.max(6, Math.min(w - pillW - 6, t.predX));
-                                const pillY = Math.max(6, t.predY - pillH - 6);
-
-                                displayCtx.fillStyle = 'rgba(18, 18, 20, 0.78)';
-                                displayCtx.beginPath();
-                                displayCtx.roundRect(pillX, pillY, pillW, pillH, 8);
-                                displayCtx.fill();
-
-                                displayCtx.fillStyle = strokeColor;
-                                displayCtx.fillText(t.label, pillX + 8, pillY + fontSize + 2);
-                                displayCtx.restore();
-                            }
-                        }
-                    }
-                }
+            if (cleanCanvas.width !== w || cleanCanvas.height !== h) {
+                cleanCanvas.width = w;
+                cleanCanvas.height = h;
+            }
+            if (displayCanvas.width !== w || displayCanvas.height !== h) {
+                displayCanvas.width = w;
+                displayCanvas.height = h;
             }
 
-            requestAnimationFrame(renderLoop);
+            const isFront = currentFacingMode === 'user';
+
+            // 1. Draw raw video frame onto cleanCanvas (mirror horizontally for front camera)
+            cleanCtx.save();
+            if (isFront) {
+                cleanCtx.translate(w, 0);
+                cleanCtx.scale(-1, 1);
+            }
+            cleanCtx.drawImage(videoElement, 0, 0, w, h);
+            cleanCtx.restore();
+
+            // 2. Apply predictive Gaussian blur to untrusted faces on cleanCanvas
+            const currentTime = performance.now();
+            const predictedTracks = [];
+
+            for (const track of trackedFaces) {
+                const ageSec = Math.min(0.14, Math.max(0, (currentTime - track.lastSeen) / 1000));
+                const predCx = track.cx + track.vx * ageSec;
+                const predCy = track.cy + track.vy * ageSec;
+                const predX = track.x + track.vx * ageSec;
+                const predY = track.y + track.vy * ageSec;
+
+                if (!track.isTrusted) {
+                    applyGaussianFaceBlur(cleanCtx, track, predCx, predCy, w, h);
+                }
+
+                predictedTracks.push({
+                    track,
+                    predX,
+                    predY
+                });
+            }
+
+            // 3. Copy cleanCanvas (ONLY video + blur, ZERO boxes/labels) onto displayCanvas
+            displayCtx.drawImage(cleanCanvas, 0, 0, w, h);
+
+            // 4. Draw optional live bounding blocks & labels ONLY on displayCanvas (never recorded)
+            if (showFaceBlocks && predictedTracks.length > 0) {
+                displayCtx.save();
+                for (const item of predictedTracks) {
+                    const { track, predX, predY } = item;
+                    const color = track.isTrusted ? '#30D158' : '#FFD60A';
+
+                    displayCtx.strokeStyle = color;
+                    displayCtx.lineWidth = Math.max(2, Math.round(w * 0.0035));
+                    displayCtx.beginPath();
+                    displayCtx.roundRect(predX, predY, track.width, track.height, 12);
+                    displayCtx.stroke();
+
+                    const badgeText = track.isTrusted ? `✓ ${track.label}` : 'Tanınmayan Kişi';
+                    const fontSize = Math.max(12, Math.round(w * 0.022));
+                    displayCtx.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+                    const textMetrics = displayCtx.measureText(badgeText);
+                    const pillW = textMetrics.width + 16;
+                    const pillH = fontSize + 10;
+                    const pillX = Math.max(6, Math.min(w - pillW - 6, predX));
+                    const pillY = Math.max(6, predY - pillH - 6);
+
+                    displayCtx.fillStyle = 'rgba(18, 18, 20, 0.78)';
+                    displayCtx.beginPath();
+                    displayCtx.roundRect(pillX, pillY, pillW, pillH, 8);
+                    displayCtx.fill();
+
+                    displayCtx.fillStyle = color;
+                    displayCtx.fillText(badgeText, pillX + 8, pillY + fontSize + 2);
+                }
+                displayCtx.restore();
+            }
         }
 
         // ==================== PHOTO & VIDEO CAPTURE (CLEAN BLUR ONLY) ====================
-        function handleShutterPress() {
-            if (cameraMode === 'photo') {
-                captureCleanPhoto();
-            } else {
-                if (isRecording) {
-                    stopVideoRecording();
-                } else {
-                    startVideoRecording();
-                }
+        function setCameraMode(mode) {
+            if (isRecording) {
+                showToast('Önce aktif video kaydını durdurun');
+                return;
             }
+            cameraMode = mode;
+            document.getElementById('modeVideoBtn').classList.toggle('active', mode === 'video');
+            document.getElementById('modePhotoBtn').classList.toggle('active', mode === 'photo');
+            document.getElementById('shutterBtn').classList.toggle('video-mode', mode === 'video');
         }
 
-        function triggerShutterFlash() {
-            const flash = document.getElementById('shutterFlash');
-            flash.classList.add('flash');
-            setTimeout(() => flash.classList.remove('flash'), 60);
-        }
-
-        function captureCleanPhoto() {
-            if (!cleanCanvas.width || !cleanCanvas.height) {
+        function handleShutterPress() {
+            if (!cleanCanvas.width || videoElement.readyState < 2) {
                 showToast('Kamera henüz hazır değil');
                 return;
             }
-            triggerShutterFlash();
+            if (cameraMode === 'photo') {
+                takeCleanPhoto();
+            } else if (isRecording) {
+                stopVideoRecording();
+            } else {
+                startVideoRecording();
+            }
+        }
 
-            cleanCanvas.toBlob(blob => {
+        function takeCleanPhoto() {
+            const flash = document.getElementById('shutterFlash');
+            flash.classList.add('flash');
+            setTimeout(() => flash.classList.remove('flash'), 120);
+
+            // Capture from cleanCanvas so boxes/labels are 100% excluded
+            cleanCanvas.toBlob((blob) => {
                 if (!blob) return;
                 const url = URL.createObjectURL(blob);
                 const filename = `BlurKayit_${Date.now()}.jpg`;
-                setLastCapturedMedia({ type: 'photo', url, filename });
-                showToast('Fotoğraf çekildi (Bloksuz temiz blur)');
-            }, 'image/jpeg', 0.93);
+                updateLastCapturedMedia({
+                    type: 'photo',
+                    url,
+                    thumbUrl: url,
+                    filename
+                });
+                showToast('Fotoğraf çekildi (Sadece Blur)');
+            }, 'image/jpeg', 0.94);
         }
 
         function startVideoRecording() {
-            if (!cleanCanvas.width || !cleanCanvas.height) {
-                showToast('Kamera henüz hazır değil');
-                return;
-            }
-
             try {
-                // Record from cleanCanvas so saved videos contain ONLY blur and zero UI blocks
-                const canvasStream = cleanCanvas.captureStream(targetFps);
-                if (window.stream) {
-                    const audioTracks = window.stream.getAudioTracks();
-                    audioTracks.forEach(track => canvasStream.addTrack(track));
-                }
-
-                const mimeTypes = [
+                const stream = cleanCanvas.captureStream(targetFps);
+                const mimeCandidates = [
                     'video/mp4',
-                    'video/webm;codecs=vp9,opus',
-                    'video/webm;codecs=vp8,opus',
+                    'video/webm;codecs=vp9',
+                    'video/webm;codecs=vp8',
                     'video/webm'
                 ];
-                const supportedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
+                const supportedMime = mimeCandidates.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
 
                 recordedChunks = [];
                 mediaRecorder = supportedMime
-                    ? new MediaRecorder(canvasStream, { mimeType: supportedMime })
-                    : new MediaRecorder(canvasStream);
+                    ? new MediaRecorder(stream, { mimeType: supportedMime, videoBitsPerSecond: 6000000 })
+                    : new MediaRecorder(stream);
 
-                mediaRecorder.ondataavailable = event => {
+                mediaRecorder.ondataavailable = (event) => {
                     if (event.data && event.data.size > 0) {
                         recordedChunks.push(event.data);
                     }
                 };
 
                 mediaRecorder.onstop = () => {
-                    const ext = (mediaRecorder.mimeType || '').includes('mp4') ? 'mp4' : 'webm';
-                    const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
-                    const url = URL.createObjectURL(blob);
+                    const mimeType = mediaRecorder.mimeType || 'video/webm';
+                    const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+                    const blob = new Blob(recordedChunks, { type: mimeType });
+                    const videoUrl = URL.createObjectURL(blob);
+                    const thumbUrl = cleanCanvas.toDataURL('image/jpeg', 0.7);
                     const filename = `BlurKayit_${Date.now()}.${ext}`;
 
-                    // Generate thumbnail frame from cleanCanvas
-                    const thumbUrl = cleanCanvas.toDataURL('image/jpeg', 0.7);
-                    setLastCapturedMedia({ type: 'video', url, thumbUrl, filename });
-                    showToast('Video kaydedildi (Bloksuz temiz blur)');
+                    updateLastCapturedMedia({
+                        type: 'video',
+                        url: videoUrl,
+                        thumbUrl,
+                        filename
+                    });
+                    showToast('Video kaydedildi');
                 };
 
                 mediaRecorder.start(250);
                 isRecording = true;
                 recordingStartTime = Date.now();
-
                 document.getElementById('shutterBtn').classList.add('recording');
-                const timerPill = document.getElementById('recTimerPill');
-                const timerText = document.getElementById('recTimerText');
-                timerText.innerText = '00:00';
-                timerPill.classList.add('active');
-
-                recordingTimerInterval = setInterval(() => {
-                    const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
-                    const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
-                    const secs = String(elapsed % 60).padStart(2, '0');
-                    timerText.innerText = `${mins}:${secs}`;
-                }, 500);
+                document.getElementById('recTimerPill').classList.add('active');
+                updateRecordingTimer();
+                recordingTimerInterval = setInterval(updateRecordingTimer, 500);
             } catch (err) {
                 console.error('Video kayıt hatası:', err);
-                showToast('Video kaydı başlatılamadı');
+                showToast('Bu tarayıcıda video kaydı desteklenmiyor');
             }
         }
 
         function stopVideoRecording() {
-            if (!isRecording || !mediaRecorder) return;
             isRecording = false;
             clearInterval(recordingTimerInterval);
             document.getElementById('shutterBtn').classList.remove('recording');
             document.getElementById('recTimerPill').classList.remove('active');
-            mediaRecorder.stop();
+            document.getElementById('recTimerText').innerText = '00:00';
+
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
         }
 
-        function setLastCapturedMedia(media) {
+        function updateRecordingTimer() {
+            const elapsedSec = Math.floor((Date.now() - recordingStartTime) / 1000);
+            const mins = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+            const secs = String(elapsedSec % 60).padStart(2, '0');
+            document.getElementById('recTimerText').innerText = `${mins}:${secs}`;
+        }
+
+        function updateLastCapturedMedia(media) {
             if (lastCapturedMedia && lastCapturedMedia.url) {
                 URL.revokeObjectURL(lastCapturedMedia.url);
             }
             lastCapturedMedia = media;
 
-            const thumbBox = document.getElementById('galleryThumb');
-            if (media.type === 'photo') {
-                thumbBox.innerHTML = `<img src="${media.url}" alt="Son Fotoğraf">`;
-            } else {
-                thumbBox.innerHTML = `<img src="${media.thumbUrl}" alt="Son Video"><span class="video-badge-mini">VİDEO</span>`;
-            }
+            const thumbEl = document.getElementById('galleryThumb');
+            thumbEl.innerHTML = `
+                <img src="${media.thumbUrl}" alt="Son Çekim">
+                ${media.type === 'video' ? '<span class="video-badge-mini">VİDEO</span>' : ''}
+            `;
         }
 
         function openLastMediaPreview() {
@@ -1626,17 +1732,15 @@
                 showToast('Henüz çekim yapılmadı');
                 return;
             }
-
             const container = document.getElementById('previewMediaContainer');
             const title = document.getElementById('previewTitle');
             const downloadBtn = document.getElementById('downloadPreviewBtn');
 
-            if (lastCapturedMedia.type === 'photo') {
-                title.innerText = 'BlurKayıt — Fotoğraf Önizleme';
-                container.innerHTML = `<img src="${lastCapturedMedia.url}" alt="Çekilen Fotoğraf">`;
+            title.innerText = lastCapturedMedia.type === 'video' ? 'BlurKayıt Video' : 'BlurKayıt Fotoğraf';
+            if (lastCapturedMedia.type === 'video') {
+                container.innerHTML = `<video src="${lastCapturedMedia.url}" controls autoplay playsinline loop></video>`;
             } else {
-                title.innerText = 'BlurKayıt — Video Önizleme';
-                container.innerHTML = `<video src="${lastCapturedMedia.url}" controls playsinline autoplay loop></video>`;
+                container.innerHTML = `<img src="${lastCapturedMedia.url}" alt="BlurKayıt Çekimi">`;
             }
 
             downloadBtn.onclick = () => {
@@ -1652,7 +1756,7 @@
             document.getElementById('mediaPreviewSheet').classList.add('open');
         }
 
-        // ==================== TRUSTED FACES STORAGE & SHEETS ====================
+        // ==================== FOCUS RING & BOTTOM SHEETS ====================
         function triggerFocusRing(event) {
             const box = document.getElementById('viewfinderBox');
             const ring = document.getElementById('focusRing');
@@ -1667,19 +1771,13 @@
             ring.classList.add('show');
 
             clearTimeout(ring._hideTimer);
-            ring._hideTimer = setTimeout(() => {
-                ring.classList.remove('show');
-            }, 900);
+            ring._hideTimer = setTimeout(() => ring.classList.remove('show'), 950);
         }
 
         function openRegisterSheet() {
-            if (!isModelsLoaded) {
-                showToast('Modeller henüz yükleniyor...');
-                return;
-            }
             document.getElementById('personNameInput').value = '';
             document.getElementById('registerSheet').classList.add('open');
-            setTimeout(() => document.getElementById('personNameInput').focus(), 120);
+            setTimeout(() => document.getElementById('personNameInput').focus(), 180);
         }
 
         function openSavedFacesSheet() {
@@ -1691,6 +1789,7 @@
             document.querySelectorAll('.sheet-backdrop').forEach(el => el.classList.remove('open'));
         }
 
+        // ==================== MULTI-ANGLE TRUSTED FACE REGISTRATION & STORAGE ====================
         async function registerCurrentFace() {
             const nameInput = document.getElementById('personNameInput');
             const personName = nameInput.value.trim();
@@ -1705,15 +1804,33 @@
                 return;
             }
 
-            showToast('Yüz taranıyor, sabit durun...');
+            showToast('Çok açılı tarama yapılıyor, sabit durun...');
             try {
-                const detection = await faceapi
-                    .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.35 }))
-                    .withFaceLandmarks()
-                    .withFaceDescriptor();
+                const frameW = videoElement.videoWidth || 640;
+                const frameH = videoElement.videoHeight || 480;
+                const collectedDescriptors = [];
 
-                if (!detection) {
-                    showToast('Yüz algılanamadı! Kameraya net bakın.');
+                // Capture 3 rapid samples (~140ms apart) of the largest/closest face for high accuracy
+                for (let sampleIdx = 0; sampleIdx < 3; sampleIdx++) {
+                    const allFaces = await faceapi
+                        .detectAllFaces(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.45 }))
+                        .withFaceLandmarks()
+                        .withFaceDescriptors();
+
+                    const validFaces = allFaces.filter(d => isValidFaceBox(d.detection.box, frameW, frameH));
+                    if (validFaces.length > 0) {
+                        // Pick the largest (closest to camera) face to avoid accidentally registering background bystanders
+                        validFaces.sort((a, b) => (b.detection.box.width * b.detection.box.height) - (a.detection.box.width * a.detection.box.height));
+                        collectedDescriptors.push(validFaces[0].descriptor);
+                    }
+
+                    if (sampleIdx < 2) {
+                        await new Promise(resolve => setTimeout(resolve, 140));
+                    }
+                }
+
+                if (collectedDescriptors.length === 0) {
+                    showToast('Net yüz algılanamadı! Işığa ve kameraya bakın.');
                     return;
                 }
 
@@ -1722,19 +1839,27 @@
                 );
 
                 if (existing) {
-                    existing.descriptors.push(detection.descriptor);
+                    existing.descriptors.push(...collectedDescriptors);
+                    // Keep up to 8 best angle samples per person
+                    if (existing.descriptors.length > 8) {
+                        existing.descriptors = existing.descriptors.slice(-8);
+                    }
                 } else {
                     savedLabeledDescriptors.push(
-                        new faceapi.LabeledFaceDescriptors(personName, [detection.descriptor])
+                        new faceapi.LabeledFaceDescriptors(personName, collectedDescriptors)
                     );
                 }
 
-                faceMatcher = new faceapi.FaceMatcher(savedLabeledDescriptors, 0.56);
-                identityCache = [];
+                faceMatcher = new faceapi.FaceMatcher(savedLabeledDescriptors, STRICT_MATCH_THRESHOLD);
+                // Reset active track verification so newly registered person unlocks immediately
+                trackedFaces.forEach(t => {
+                    t.lastVerifiedAt = 0;
+                    t.trustedStreak = 0;
+                });
                 saveFacesToStorage();
                 updateFaceCountBadge();
                 closeAllSheets();
-                showToast(`${personName} güvenilir listeye eklendi!`);
+                showToast(`${personName} (${collectedDescriptors.length} açı) güvenilir listeye eklendi!`);
             } catch (err) {
                 console.error('Yüz kayıt hatası:', err);
                 showToast('Yüz kaydedilirken hata oluştu');
@@ -1743,13 +1868,13 @@
 
         function saveFacesToStorage() {
             try {
-                const serialized = savedLabeledDescriptors.map(ld => ({
-                    label: ld.label,
-                    descriptors: ld.descriptors.map(d => Array.from(d))
+                const serialized = savedLabeledDescriptors.map(item => ({
+                    label: item.label,
+                    descriptors: item.descriptors.map(d => Array.from(d))
                 }));
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(serialized));
             } catch (err) {
-                console.warn('Kayıtlı yüzler hafızaya yazılamadı:', err);
+                console.warn('Kayıtlı yüzler diske yazılamadı:', err);
             }
         }
 
@@ -1765,7 +1890,7 @@
                     )
                 );
                 if (savedLabeledDescriptors.length > 0) {
-                    faceMatcher = new faceapi.FaceMatcher(savedLabeledDescriptors, 0.56);
+                    faceMatcher = new faceapi.FaceMatcher(savedLabeledDescriptors, STRICT_MATCH_THRESHOLD);
                 }
                 updateFaceCountBadge();
             } catch (err) {
@@ -1776,9 +1901,13 @@
         function deleteSavedFace(index) {
             const removed = savedLabeledDescriptors.splice(index, 1);
             faceMatcher = savedLabeledDescriptors.length > 0
-                ? new faceapi.FaceMatcher(savedLabeledDescriptors, 0.56)
+                ? new faceapi.FaceMatcher(savedLabeledDescriptors, STRICT_MATCH_THRESHOLD)
                 : null;
-            identityCache = [];
+            trackedFaces.forEach(t => {
+                t.isTrusted = false;
+                t.trustedStreak = 0;
+                t.lastVerifiedAt = 0;
+            });
             saveFacesToStorage();
             updateFaceCountBadge();
             renderSavedFacesList();
@@ -1788,32 +1917,37 @@
         }
 
         function updateFaceCountBadge() {
-            document.getElementById('faceCountBadge').innerText = savedLabeledDescriptors.length;
+            document.getElementById('faceCountBadge').innerText = String(savedLabeledDescriptors.length);
         }
 
         function renderSavedFacesList() {
-            const listEl = document.getElementById('savedFacesList');
+            const container = document.getElementById('savedFacesList');
             if (savedLabeledDescriptors.length === 0) {
-                listEl.innerHTML = '<span style="font-size: 0.85rem; color: var(--text-secondary);">Henüz kayıtlı yüz yok.</span>';
+                container.innerHTML = '<span style="font-size: 0.85rem; color: var(--text-secondary);">Henüz kayıtlı yüz yok.</span>';
                 return;
             }
-
-            listEl.innerHTML = savedLabeledDescriptors
-                .map((item, idx) => `
-                    <div class="face-tag">
-                        <span>🛡️ ${item.label}</span>
-                        <button type="button" aria-label="Sil" onclick="deleteSavedFace(${idx})">✕</button>
-                    </div>
-                `)
-                .join('');
+            container.innerHTML = savedLabeledDescriptors.map((item, idx) => `
+                <div class="face-tag">
+                    <span>✓ ${item.label}</span>
+                    <button type="button" title="Sil" onclick="deleteSavedFace(${idx})">✕</button>
+                </div>
+            `).join('');
         }
 
-        // ==================== BOOTSTRAP ON WINDOW LOAD ====================
-        window.onload = () => {
-            requestAnimationFrame(renderLoop);
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.innerText = message;
+            toast.classList.add('show');
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => toast.classList.remove('show'), 2400);
+        }
+
+        // ==================== INITIALIZATION ====================
+        window.addEventListener('DOMContentLoaded', () => {
+            updateScanRateUI();
             startCamera();
             loadAIModels();
-        };
+        });
     </script>
 </body>
 </html>
