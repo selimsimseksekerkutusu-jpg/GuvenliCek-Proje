@@ -1,51 +1,627 @@
-<!-- ... existing code ... -->
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <title>GüvenliÇek — Akıllı Yüz Tanıma & Gizlilik Kamerası</title>
+    <link rel="manifest" href="./manifest.json">
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.85);
+            --primary: #38bdf8;
+            --primary-dark: #0284c7;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: rgba(148, 163, 184, 0.2);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: rgba(15, 23, 42, 0.95);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            gap: 8px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+            font-size: 1.05rem;
+            letter-spacing: -0.02em;
+        }
+
+        .brand-badge {
+            background: linear-gradient(135deg, var(--primary), #6366f1);
+            color: #fff;
+            width: 30px;
+            height: 30px;
+            border-radius: 8px;
+            display: grid;
+            place-items: center;
+            font-size: 0.95rem;
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 500;
+            max-width: 60%;
+        }
+
+        .status-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--warning);
+            flex-shrink: 0;
+            animation: pulse 1.4s infinite;
+        }
+
+        .status-dot.ready {
+            background: var(--success);
+            animation: none;
+            box-shadow: 0 0 8px var(--success);
+        }
+
+        .status-dot.error {
+            background: var(--danger);
+            animation: none;
+        }
+
+        #statusText {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.45; transform: scale(0.85); }
+        }
+
+        /* Main Camera Viewport */
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 12px;
+            gap: 12px;
+            width: 100%;
+            max-width: 720px;
+            margin: 0 auto;
+        }
+
+        .camera-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 3 / 4;
+            max-height: 62dvh;
+            background: #020617;
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+        }
+
+        @media (min-width: 640px) {
+            .camera-container {
+                aspect-ratio: 16 / 10;
+            }
+        }
+
+        video, canvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        video.mirror, canvas.mirror {
+            transform: scaleX(-1);
+        }
+
+        .camera-overlay-top {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            right: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .camera-overlay-top > * {
+            pointer-events: auto;
+        }
+
+        .icon-btn {
+            background: rgba(15, 23, 42, 0.72);
+            backdrop-filter: blur(8px);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 8px 12px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: transform 0.15s ease, background 0.15s ease;
+        }
+
+        .icon-btn:active {
+            transform: scale(0.95);
+        }
+
+        .icon-btn.active {
+            background: rgba(56, 189, 248, 0.25);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        /* Manual Start Overlay if mobile blocks autoplay */
+        .start-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(2, 6, 23, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            padding: 24px;
+            text-align: center;
+            z-index: 15;
+        }
+
+        .start-overlay.hidden {
+            display: none;
+        }
+
+        /* Controls Bar */
+        .controls-panel {
+            width: 100%;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .action-row {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn {
+            border: none;
+            border-radius: 12px;
+            padding: 11px 14px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: transform 0.15s ease, opacity 0.15s ease;
+        }
+
+        .btn:active {
+            transform: scale(0.96);
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: #0f172a;
+        }
+
+        .btn-secondary {
+            background: rgba(148, 163, 184, 0.16);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+        }
+
+        .shutter-btn {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: #fff;
+            border: 4px solid var(--primary);
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.4);
+            transition: transform 0.15s ease;
+        }
+
+        .shutter-btn:active {
+            transform: scale(0.9);
+        }
+
+        /* Saved Faces Chips */
+        .saved-faces-section {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .section-title {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .faces-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .face-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(56, 189, 248, 0.14);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            color: var(--text-main);
+            padding: 5px 10px;
+            border-radius: 999px;
+            font-size: 0.78rem;
+        }
+
+        .face-chip button {
+            background: none;
+            border: none;
+            color: var(--danger);
+            font-weight: 700;
+            cursor: pointer;
+            font-size: 0.9rem;
+            line-height: 1;
+        }
+
+        /* Modal */
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(2, 6, 23, 0.8);
+            backdrop-filter: blur(4px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+            z-index: 50;
+        }
+
+        .modal-backdrop.open {
+            display: flex;
+        }
+
+        .modal-card {
+            background: #1e293b;
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 20px;
+            width: 100%;
+            max-width: 380px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .modal-card h3 {
+            font-size: 1.05rem;
+        }
+
+        .modal-card input {
+            width: 100%;
+            padding: 11px 12px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: #0f172a;
+            color: var(--text-main);
+            font-size: 0.95rem;
+            outline: none;
+        }
+
+        .modal-card input:focus {
+            border-color: var(--primary);
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+
+        /* Toast Notification */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(80px);
+            background: #1e293b;
+            color: var(--text-main);
+            border: 1px solid var(--primary);
+            padding: 10px 18px;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            opacity: 0;
+            transition: transform 0.25s ease, opacity 0.25s ease;
+            z-index: 100;
+            white-space: nowrap;
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="brand">
+            <div class="brand-badge">🛡️</div>
+            <span>GüvenliÇek</span>
+        </div>
+        <div class="status-pill">
+            <span id="statusDot" class="status-dot"></span>
+            <span id="statusText">Kütüphane yükleniyor...</span>
+        </div>
+    </header>
+
+    <main>
+        <div class="camera-container">
+            <video id="videoElement" class="mirror" autoplay playsinline muted></video>
+            <canvas id="canvasElement" class="mirror"></canvas>
+
+            <div class="camera-overlay-top">
+                <button id="blurToggleBtn" class="icon-btn active" type="button" onclick="togglePrivacyBlur()">
+                    🔒 Gizlilik: Açık
+                </button>
+                <button id="switchCamBtn" class="icon-btn" type="button" onclick="switchCamera()">
+                    🔄 Kamera Çevir
+                </button>
+            </div>
+
+            <div id="startOverlay" class="start-overlay hidden">
+                <p style="font-size: 0.95rem; color: var(--text-muted);">
+                    Mobil tarayıcınız otomatik kamera erişimini engelledi. Devam etmek için dokunun.
+                </p>
+                <button class="btn btn-primary" type="button" onclick="startCamera()">
+                    📷 Kamerayı Başlat
+                </button>
+            </div>
+        </div>
+
+        <div class="controls-panel">
+            <div class="action-row">
+                <button class="btn btn-secondary" type="button" onclick="openRegisterModal()">
+                    ➕ Yüz Tanıt
+                </button>
+                <button class="shutter-btn" type="button" title="Fotoğraf Çek" onclick="captureSafePhoto()"></button>
+                <button class="btn btn-secondary" type="button" onclick="reloadModelsManually()">
+                    ⚡ Modelleri Yenile
+                </button>
+            </div>
+
+            <div class="saved-faces-section">
+                <div class="section-title">
+                    <span>Güvenilir Kişiler (Kayıtlı Yüzler)</span>
+                    <span id="faceCountBadge">0 kişi</span>
+                </div>
+                <div id="savedFacesList" class="faces-list">
+                    <span style="font-size: 0.78rem; color: var(--text-muted);">Henüz kayıtlı yüz yok.</span>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Face Registration Modal -->
+    <div id="registerModal" class="modal-backdrop">
+        <div class="modal-card">
+            <h3>Yeni Güvenilir Yüz Kaydet</h3>
+            <p style="font-size: 0.83rem; color: var(--text-muted);">
+                Kameraya net bir şekilde bakın ve kişinin adını girin. Kayıtlı kişiler bulanıklaştırılmaz.
+            </p>
+            <input type="text" id="personNameInput" placeholder="Örn: Ahmet veya Ben" maxlength="25">
+            <div class="modal-actions">
+                <button class="btn btn-secondary" type="button" onclick="closeRegisterModal()">İptal</button>
+                <button class="btn btn-primary" type="button" onclick="registerCurrentFace()">Kaydet</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        const videoElement = document.getElementById('videoElement');
+        const canvasElement = document.getElementById('canvasElement');
+        const ctx = canvasElement.getContext('2d');
+
+        let isModelsLoaded = false;
+        let isProcessing = false;
+        let privacyBlurEnabled = true;
+        let currentFacingMode = 'user';
+        let savedLabeledDescriptors = [];
+        let faceMatcher = null;
+        let latestDetections = [];
+
+        const STORAGE_KEY = 'guvenlicek_saved_faces_v1';
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.innerText = message;
+            toast.classList.add('show');
+            clearTimeout(window._toastTimer);
+            window._toastTimer = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        function setStatus(state, text) {
+            const dot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            dot.className = 'status-dot' + (state ? ' ' + state : '');
+            statusText.innerText = text;
+        }
+
+        // Load face-api.js locally first, then fallback to reliable CDN
+        function ensureFaceApiLoaded() {
+            return new Promise((resolve, reject) => {
+                if (typeof window.faceapi !== 'undefined') {
+                    return resolve();
+                }
+
+                setStatus('', 'AI motoru yükleniyor...');
+                const localScript = document.createElement('script');
+                localScript.src = './face-api.min.js';
+                localScript.onload = () => {
+                    if (typeof window.faceapi !== 'undefined') {
+                        resolve();
+                    } else {
+                        loadCdnScript(resolve, reject);
+                    }
+                };
+                localScript.onerror = () => {
+                    console.warn('Yerel face-api.min.js bulunamadı, CDN üzerinden yükleniyor...');
+                    loadCdnScript(resolve, reject);
+                };
+                document.head.appendChild(localScript);
+            });
+        }
+
+        function loadCdnScript(resolve, reject) {
+            const cdnScript = document.createElement('script');
+            cdnScript.src = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
+            cdnScript.onload = () => resolve();
+            cdnScript.onerror = () => reject(new Error('face-api.js CDN yüklenemedi'));
+            document.head.appendChild(cdnScript);
+        }
+
+        // Verify if local ./models folder actually returns JSON (not Netlify HTML 404)
+        async function checkLocalModelsAvailable(baseUrl) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 3500);
+                const res = await fetch(`${baseUrl}/ssd_mobilenetv1_model-weights_manifest.json`, {
+                    signal: controller.signal
+                });
+                clearTimeout(timeout);
+                const contentType = res.headers.get('content-type') || '';
+                return res.ok && !contentType.includes('text/html');
+            } catch (e) {
+                return false;
+            }
+        }
+
+        async function loadSequentialModels(baseUrl, sourceLabel) {
+            setStatus('', `Model 1/3 yükleniyor (${sourceLabel})...`);
+            await faceapi.nets.ssdMobilenetv1.loadFromUri(baseUrl);
+
+            setStatus('', `Model 2/3 yükleniyor (${sourceLabel})...`);
+            await faceapi.nets.faceLandmark68Net.loadFromUri(baseUrl);
+
+            setStatus('', `Model 3/3 yükleniyor (${sourceLabel})...`);
+            await faceapi.nets.faceRecognitionNet.loadFromUri(baseUrl);
+        }
+
         // Load AI Models with Robust Fallback Strategy
         async function loadAIModels() {
             const LOCAL_MODEL_URL = './models';
             const FALLBACK_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
             try {
-                // Try loading from local /models folder with a fast timeout check
-                await Promise.all([
-                    faceapi.nets.ssdMobilenetv1.loadFromUri(LOCAL_MODEL_URL),
-                    faceapi.nets.faceLandmark68Net.loadFromUri(LOCAL_MODEL_URL),
-                    faceapi.nets.faceRecognitionNet.loadFromUri(LOCAL_MODEL_URL)
-                ]);
+                await ensureFaceApiLoaded();
 
-                isModelsLoaded = true;
-                document.getElementById('statusDot').className = 'status-dot ready';
-                document.getElementById('statusText').innerText = "Sistem Hazır";
-                showToast("Yapay Zekâ Hazır!");
-            } catch (err) {
-                console.warn("Yerel modeller bulunamadı, CDN deneniyor...", err);
-                try {
-                    await Promise.all([
-                        faceapi.nets.ssdMobilenetv1.loadFromUri(FALLBACK_URL),
-                        faceapi.nets.faceLandmark68Net.loadFromUri(FALLBACK_URL),
-                        faceapi.nets.faceRecognitionNet.loadFromUri(FALLBACK_URL)
-                    ]);
+                const hasLocalModels = await checkLocalModelsAvailable(LOCAL_MODEL_URL);
+                if (hasLocalModels) {
+                    await loadSequentialModels(LOCAL_MODEL_URL, 'Yerel');
                     isModelsLoaded = true;
-                    document.getElementById('statusDot').className = 'status-dot ready';
-                    document.getElementById('statusText').innerText = "Sistem Hazır (CDN)";
-                    showToast("CDN Modelleri Yüklendi!");
+                    setStatus('ready', 'Sistem Hazır');
+                    showToast('Yapay Zekâ Hazır!');
+                } else {
+                    throw new Error('Yerel models klasörü bulunamadı');
+                }
+            } catch (err) {
+                console.warn('Yerel modeller kullanılamadı, CDN deneniyor...', err);
+                try {
+                    await loadSequentialModels(FALLBACK_URL, 'Bulut');
+                    isModelsLoaded = true;
+                    setStatus('ready', 'Sistem Hazır (CDN)');
+                    showToast('Yapay Zekâ Modelleri Yüklendi!');
                 } catch (fallbackErr) {
-                    console.error("Model yükleme hatası:", fallbackErr);
-                    document.getElementById('statusText').innerText = "Model Yükleme Hatası";
-                    showToast("Model dosyaları okunamadı!");
+                    console.error('Model yükleme hatası:', fallbackErr);
+                    setStatus('error', 'Model Yükleme Hatası');
+                    showToast('İnternet bağlantınızı kontrol edin!');
                 }
             }
 
             loadSavedFacesFromStorage();
         }
 
+        function reloadModelsManually() {
+            isModelsLoaded = false;
+            loadAIModels();
+        }
+
         // Mobile-Optimized Camera Stream Initialization
         async function startCamera() {
+            const startOverlay = document.getElementById('startOverlay');
             try {
                 if (window.stream) {
                     window.stream.getTracks().forEach(track => track.stop());
                 }
 
-                // Video constraints optimized for mobile devices
                 const constraints = {
                     audio: false,
                     video: {
@@ -59,10 +635,22 @@
                 window.stream = stream;
                 videoElement.srcObject = stream;
 
+                videoElement.playsInline = true;
+                videoElement.muted = true;
                 videoElement.setAttribute('playsinline', 'true');
                 videoElement.setAttribute('muted', 'true');
 
                 await videoElement.play();
+                startOverlay.classList.add('hidden');
+
+                // Mirror only front camera
+                if (currentFacingMode === 'user') {
+                    videoElement.classList.add('mirror');
+                    canvasElement.classList.add('mirror');
+                } else {
+                    videoElement.classList.remove('mirror');
+                    canvasElement.classList.remove('mirror');
+                }
 
                 const updateCanvasDimensions = () => {
                     if (videoElement.videoWidth && videoElement.videoHeight) {
@@ -77,13 +665,262 @@
 
                 requestAnimationFrame(processLoop);
             } catch (err) {
-                console.error("Kamera başlatılamadı:", err);
-                showToast("Kamera izni reddedildi!");
-                document.getElementById('statusText').innerText = "Kamera İzni Yok";
+                console.error('Kamera başlatılamadı:', err);
+                startOverlay.classList.remove('hidden');
+                showToast('Kamera izni bekleniyor!');
+                if (!isModelsLoaded) {
+                    setStatus('error', 'Kamera İzni Yok');
+                }
             }
         }
-<!-- ... existing code ... -->
-        // App Initialization: Start Camera immediately to trigger permission popup, then load AI
+
+        function switchCamera() {
+            currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+            startCamera();
+        }
+
+        function togglePrivacyBlur() {
+            privacyBlurEnabled = !privacyBlurEnabled;
+            const btn = document.getElementById('blurToggleBtn');
+            if (privacyBlurEnabled) {
+                btn.classList.add('active');
+                btn.innerText = '🔒 Gizlilik: Açık';
+                showToast('Tanınmayan yüzler gizlenecek');
+            } else {
+                btn.classList.remove('active');
+                btn.innerText = '🔓 Gizlilik: Kapalı';
+                showToast('Gizlilik bulanıklığı kapatıldı');
+            }
+        }
+
+        // Main AI Detection & Privacy Loop
+        async function processLoop() {
+            if (!videoElement.paused && !videoElement.ended && videoElement.videoWidth > 0) {
+                if (isModelsLoaded && !isProcessing) {
+                    isProcessing = true;
+                    try {
+                        const detections = await faceapi
+                            .detectAllFaces(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+                            .withFaceLandmarks()
+                            .withFaceDescriptors();
+
+                        latestDetections = detections;
+                        drawDetections(detections);
+                    } catch (e) {
+                        console.error('Algılama döngüsü hatası:', e);
+                    } finally {
+                        isProcessing = false;
+                    }
+                }
+            }
+
+            setTimeout(() => {
+                requestAnimationFrame(processLoop);
+            }, 90);
+        }
+
+        function drawDetections(detections) {
+            ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            detections.forEach(det => {
+                const box = det.detection.box;
+                let label = 'Tanınmayan Kişi';
+                let isTrusted = false;
+
+                if (faceMatcher) {
+                    const bestMatch = faceMatcher.findBestMatch(det.descriptor);
+                    if (bestMatch.label !== 'unknown') {
+                        label = `Güvenli: ${bestMatch.label}`;
+                        isTrusted = true;
+                    }
+                }
+
+                // Blur unknown faces when privacy mode is active
+                if (privacyBlurEnabled && !isTrusted) {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.roundRect(box.x, box.y, box.width, box.height, 14);
+                    ctx.clip();
+                    ctx.filter = 'blur(18px)';
+                    ctx.drawImage(
+                        videoElement,
+                        box.x, box.y, box.width, box.height,
+                        box.x, box.y, box.width, box.height
+                    );
+                    ctx.restore();
+                }
+
+                // Draw bounding box
+                ctx.strokeStyle = isTrusted ? '#22c55e' : '#f59e0b';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.roundRect(box.x, box.y, box.width, box.height, 12);
+                ctx.stroke();
+
+                // Draw readable label (un-mirrored if front camera is active)
+                ctx.save();
+                if (currentFacingMode === 'user') {
+                    ctx.translate(box.x + box.width, box.y - 8);
+                    ctx.scale(-1, 1);
+                    drawLabelBadge(0, 0, label, isTrusted);
+                } else {
+                    drawLabelBadge(box.x, box.y - 8, label, isTrusted);
+                }
+                ctx.restore();
+            });
+        }
+
+        function drawLabelBadge(x, y, text, isTrusted) {
+            ctx.font = '600 14px -apple-system, sans-serif';
+            const textWidth = ctx.measureText(text).width;
+            const padX = 10;
+            const height = 24;
+            const topY = Math.max(4, y - height + 4);
+
+            ctx.fillStyle = isTrusted ? 'rgba(22, 163, 74, 0.9)' : 'rgba(217, 119, 6, 0.9)';
+            ctx.beginPath();
+            ctx.roundRect(x, topY, textWidth + padX * 2, height, 6);
+            ctx.fill();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(text, x + padX, topY + 17);
+        }
+
+        // LocalStorage Face Management
+        function loadSavedFacesFromStorage() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) {
+                    savedLabeledDescriptors = [];
+                    faceMatcher = null;
+                    renderSavedFacesUI();
+                    return;
+                }
+
+                const parsed = JSON.parse(raw);
+                savedLabeledDescriptors = parsed.map(item => {
+                    const descriptors = item.descriptors.map(d => new Float32Array(d));
+                    return new faceapi.LabeledFaceDescriptors(item.label, descriptors);
+                });
+
+                if (savedLabeledDescriptors.length > 0 && typeof faceapi !== 'undefined') {
+                    faceMatcher = new faceapi.FaceMatcher(savedLabeledDescriptors, 0.55);
+                } else {
+                    faceMatcher = null;
+                }
+
+                renderSavedFacesUI();
+            } catch (e) {
+                console.error('Kayıtlı yüzler okunamadı:', e);
+            }
+        }
+
+        function saveFacesToStorage() {
+            const serializable = savedLabeledDescriptors.map(ld => ({
+                label: ld.label,
+                descriptors: ld.descriptors.map(d => Array.from(d))
+            }));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
+            if (savedLabeledDescriptors.length > 0) {
+                faceMatcher = new faceapi.FaceMatcher(savedLabeledDescriptors, 0.55);
+            } else {
+                faceMatcher = null;
+            }
+            renderSavedFacesUI();
+        }
+
+        function renderSavedFacesUI() {
+            const container = document.getElementById('savedFacesList');
+            const badge = document.getElementById('faceCountBadge');
+            badge.innerText = `${savedLabeledDescriptors.length} kişi`;
+
+            if (savedLabeledDescriptors.length === 0) {
+                container.innerHTML = '<span style="font-size: 0.78rem; color: var(--text-muted);">Henüz kayıtlı yüz yok.</span>';
+                return;
+            }
+
+            container.innerHTML = savedLabeledDescriptors.map((item, idx) => `
+                <div class="face-chip">
+                    <span>👤 ${item.label}</span>
+                    <button type="button" title="Sil" onclick="deleteSavedFace(${idx})">×</button>
+                </div>
+            `).join('');
+        }
+
+        function deleteSavedFace(index) {
+            savedLabeledDescriptors.splice(index, 1);
+            saveFacesToStorage();
+            showToast('Kayıt silindi');
+        }
+
+        function openRegisterModal() {
+            if (!isModelsLoaded) {
+                showToast('Lütfen modellerin yüklenmesini bekleyin');
+                return;
+            }
+            document.getElementById('personNameInput').value = '';
+            document.getElementById('registerModal').classList.add('open');
+        }
+
+        function closeRegisterModal() {
+            document.getElementById('registerModal').classList.remove('open');
+        }
+
+        function registerCurrentFace() {
+            const name = document.getElementById('personNameInput').value.trim();
+            if (!name) {
+                showToast('Lütfen bir isim girin');
+                return;
+            }
+            if (!latestDetections || latestDetections.length === 0) {
+                showToast('Kamerada yüz algılanamadı!');
+                return;
+            }
+
+            const descriptor = latestDetections[0].descriptor;
+            const existing = savedLabeledDescriptors.find(
+                item => item.label.toLowerCase() === name.toLowerCase()
+            );
+
+            if (existing) {
+                existing.descriptors.push(descriptor);
+            } else {
+                savedLabeledDescriptors.push(new faceapi.LabeledFaceDescriptors(name, [descriptor]));
+            }
+
+            saveFacesToStorage();
+            closeRegisterModal();
+            showToast(`${name} güvenilir listeye eklendi!`);
+        }
+
+        // Capture & Download Safe Photo
+        function captureSafePhoto() {
+            if (!videoElement.videoWidth) {
+                showToast('Kamera henüz hazır değil');
+                return;
+            }
+
+            const outCanvas = document.createElement('canvas');
+            outCanvas.width = videoElement.videoWidth;
+            outCanvas.height = videoElement.videoHeight;
+            const outCtx = outCanvas.getContext('2d');
+
+            if (currentFacingMode === 'user') {
+                outCtx.translate(outCanvas.width, 0);
+                outCtx.scale(-1, 1);
+            }
+
+            outCtx.drawImage(videoElement, 0, 0, outCanvas.width, outCanvas.height);
+            outCtx.drawImage(canvasElement, 0, 0, outCanvas.width, outCanvas.height);
+
+            const link = document.createElement('a');
+            link.download = `GuvenliCek_${Date.now()}.png`;
+            link.href = outCanvas.toDataURL('image/png');
+            link.click();
+            showToast('Güvenli fotoğraf kaydedildi!');
+        }
+
+        // App Initialization
         window.onload = () => {
             startCamera();
             loadAIModels();
