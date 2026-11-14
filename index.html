@@ -96,8 +96,12 @@
             color: var(--text-secondary);
         }
 
-        /* Recording Timer Pill (Center Top when recording) */
+        /* Recording Timer Pill (Floating Top-Center inside Viewfinder) */
         .rec-timer-pill {
+            position: absolute;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
             display: none;
             align-items: center;
             gap: 6px;
@@ -110,6 +114,8 @@
             font-variant-numeric: tabular-nums;
             letter-spacing: 0.03em;
             box-shadow: 0 4px 14px rgba(255, 59, 48, 0.45);
+            z-index: 16;
+            pointer-events: none;
         }
 
         .rec-timer-pill.active {
@@ -128,6 +134,50 @@
             display: flex;
             align-items: center;
             gap: 6px;
+        }
+
+        /* Compact iOS Scan-Rate Stepper (Readings per Second) */
+        .rate-stepper {
+            display: inline-flex;
+            align-items: center;
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: 999px;
+            padding: 2px;
+            gap: 2px;
+        }
+
+        .rate-step-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: #fff;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            font-size: 0.85rem;
+            font-weight: 700;
+            line-height: 1;
+            cursor: pointer;
+            display: grid;
+            place-items: center;
+            transition: background 0.15s ease, transform 0.12s ease;
+        }
+
+        .rate-step-btn:active {
+            background: rgba(255, 214, 10, 0.35);
+            color: var(--ios-yellow);
+            transform: scale(0.9);
+        }
+
+        .rate-value {
+            font-size: 0.7rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: var(--ios-yellow);
+            padding: 0 5px;
+            white-space: nowrap;
         }
 
         .ios-pill-btn {
@@ -658,15 +708,12 @@
             <span id="statusText">BlurKayıt Hazırlanıyor...</span>
         </div>
 
-        <div id="recTimerPill" class="rec-timer-pill">
-            <span class="rec-blink"></span>
-            <span id="recTimerText">00:00</span>
-        </div>
-
         <div class="top-toggles">
-            <button id="blurToggleBtn" class="ios-pill-btn active" type="button" onclick="togglePrivacyBlur()">
-                🔒 Blur: Açık
-            </button>
+            <div class="rate-stepper" title="Saniye başı yüz okuma hızı">
+                <button class="rate-step-btn" type="button" aria-label="Okuma hızını azalt" onclick="changeScanRate(-1)">−</button>
+                <span id="scanRateLabel" class="rate-value">10/sn</span>
+                <button class="rate-step-btn" type="button" aria-label="Okuma hızını artır" onclick="changeScanRate(1)">+</button>
+            </div>
             <button id="blockToggleBtn" class="ios-pill-btn active" type="button" onclick="toggleFaceBlocks()">
                 枠 Blok: Açık
             </button>
@@ -677,6 +724,11 @@
     <div class="viewfinder-wrapper" id="viewfinderBox" onclick="triggerFocusRing(event)">
         <video id="videoElement" autoplay playsinline muted></video>
         <canvas id="displayCanvas"></canvas>
+
+        <div id="recTimerPill" class="rec-timer-pill">
+            <span class="rec-blink"></span>
+            <span id="recTimerText">00:00</span>
+        </div>
 
         <div id="shutterFlash" class="shutter-flash"></div>
         <div id="focusRing" class="focus-ring"></div>
@@ -791,28 +843,48 @@
     <div id="toast" class="ios-toast"></div>
 
     <script>
+        // Safe roundRect fallback for older mobile browsers
+        if (!CanvasRenderingContext2D.prototype.roundRect) {
+            CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+                const radius = Math.min(r, w / 2, h / 2);
+                this.moveTo(x + radius, y);
+                this.arcTo(x + w, y, x + w, y + h, radius);
+                this.arcTo(x + w, y + h, x, y + h, radius);
+                this.arcTo(x, y + h, x, y, radius);
+                this.arcTo(x, y, x + w, y, radius);
+                this.closePath();
+                return this;
+            };
+        }
+
         const videoElement = document.getElementById('videoElement');
         const displayCanvas = document.getElementById('displayCanvas');
         const displayCtx = displayCanvas.getContext('2d');
 
-        // Offscreen canvas dedicated strictly to clean blurred output (no boxes/labels)
+        // Clean offscreen canvas: holds ONLY video + heavy blur (never draws boxes or text)
         const cleanCanvas = document.createElement('canvas');
         const cleanCtx = cleanCanvas.getContext('2d');
 
-        // Tiny offscreen canvas for super-fast cross-browser Gaussian-like blur (works on iOS Safari & Android)
+        // Tiny offscreen canvases for ultra-strong cross-browser heavy blur (works on iOS Safari & Android)
         const blurTempCanvas = document.createElement('canvas');
         const blurTempCtx = blurTempCanvas.getContext('2d');
+        const blurMidCanvas = document.createElement('canvas');
+        const blurMidCtx = blurMidCanvas.getContext('2d');
 
         let isModelsLoaded = false;
         let isDetecting = false;
-        let privacyBlurEnabled = true;
         let showFaceBlocks = true; // Controls live "Tanınmayan Kişi" block visibility
         let cameraMode = 'photo'; // 'photo' | 'video'
         let currentFacingMode = 'user';
 
+        // Configurable AI Scan Rate (Readings per second)
+        const SCAN_RATES = [2, 5, 10, 15, 20, 30];
+        let scanRateIndex = 2; // Default: 10 readings/sec (100ms)
+
         let savedLabeledDescriptors = [];
         let faceMatcher = null;
         let latestDetections = [];
+        let persistentFaces = []; // Short-term cache to prevent flicker on half/side faces
 
         // Video Recording State
         let mediaRecorder = null;
@@ -1010,18 +1082,13 @@
             }
         }
 
-        function togglePrivacyBlur() {
-            privacyBlurEnabled = !privacyBlurEnabled;
-            const btn = document.getElementById('blurToggleBtn');
-            if (privacyBlurEnabled) {
-                btn.classList.add('active');
-                btn.innerText = '🔒 Blur: Açık';
-                showToast('Tanınmayan yüzler bulanıklaştırılacak');
-            } else {
-                btn.classList.remove('active');
-                btn.innerText = '🔓 Blur: Kapalı';
-                showToast('Yüz bulanıklaştırma kapatıldı');
-            }
+        function changeScanRate(delta) {
+            const nextIndex = Math.max(0, Math.min(SCAN_RATES.length - 1, scanRateIndex + delta));
+            if (nextIndex === scanRateIndex) return;
+            scanRateIndex = nextIndex;
+            const rate = SCAN_RATES[scanRateIndex];
+            document.getElementById('scanRateLabel').innerText = `${rate}/sn`;
+            showToast(`Okuma hızı: saniyede ${rate} okuma`);
         }
 
         function toggleFaceBlocks() {
@@ -1056,24 +1123,44 @@
             if (isModelsLoaded && !isDetecting && videoElement.readyState >= 2 && videoElement.videoWidth > 0) {
                 isDetecting = true;
                 try {
+                    // Lower minConfidence (0.25) dramatically improves partial, tilted & side-profile face detection
                     const detections = await faceapi
-                        .detectAllFaces(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.48 }))
+                        .detectAllFaces(videoElement, new faceapi.SsdMobilenetv1Options({
+                            minConfidence: 0.25,
+                            maxResults: 25
+                        }))
                         .withFaceLandmarks()
                         .withFaceDescriptors();
 
                     latestDetections = detections;
+                    if (detections.length > 0) {
+                        persistentFaces = detections.map(det => ({
+                            det,
+                            timestamp: performance.now()
+                        }));
+                    }
                 } catch (err) {
                     console.error('Algılama hatası:', err);
                 } finally {
                     isDetecting = false;
                 }
             }
-            setTimeout(detectionLoop, 110);
+            const currentRate = SCAN_RATES[scanRateIndex];
+            const intervalMs = Math.max(30, Math.round(1000 / currentRate));
+            setTimeout(detectionLoop, intervalMs);
         }
 
         // ==================== CLEAN BLUR & LIVE OVERLAY RENDERING ====================
         function evaluateDetections() {
-            return latestDetections.map(det => {
+            const now = performance.now();
+            // Keep brief 320ms grace window so half-turned faces stay blurred without flickering
+            const activeDetections = latestDetections.length > 0
+                ? latestDetections
+                : persistentFaces
+                    .filter(item => now - item.timestamp < 320)
+                    .map(item => item.det);
+
+            return activeDetections.map(det => {
                 let label = 'Tanınmayan Kişi';
                 let isTrusted = false;
 
@@ -1088,7 +1175,7 @@
             });
         }
 
-        // Draws ONLY the camera feed + blur onto cleanCanvas (ZERO boxes, ZERO text labels)
+        // Draws ONLY the camera feed + heavy blur onto cleanCanvas (ZERO boxes, ZERO text labels)
         function renderCleanComposition(evaluatedFaces) {
             const w = cleanCanvas.width;
             const h = cleanCanvas.height;
@@ -1104,14 +1191,12 @@
             cleanCtx.drawImage(videoElement, 0, 0, w, h);
             cleanCtx.restore();
 
-            if (!privacyBlurEnabled) return;
-
             evaluatedFaces.forEach(item => {
                 if (item.isTrusted) return;
 
-                // Expand box slightly so entire face & chin/hairline stay cleanly blurred
-                const padX = item.box.width * 0.12;
-                const padY = item.box.height * 0.14;
+                // Wider padding covers half-turned faces, cheeks, chin and hairline completely
+                const padX = item.box.width * 0.18;
+                const padY = item.box.height * 0.20;
                 const rawX = Math.max(0, item.box.x - padX);
                 const rawY = Math.max(0, item.box.y - padY);
                 const bw = Math.min(w - rawX, item.box.width + padX * 2);
@@ -1120,19 +1205,25 @@
                 // Mirror X coordinate if front camera is active
                 const bx = isFront ? (w - rawX - bw) : rawX;
 
-                // Cross-browser smooth blur via downsampled offscreen buffer
-                blurTempCanvas.width = 16;
-                blurTempCanvas.height = 16;
+                // Two-stage aggressive downsampling (12x12 -> 6x6) for ultra-strong, smooth privacy blur
+                blurMidCanvas.width = 12;
+                blurMidCanvas.height = 12;
+                blurMidCtx.imageSmoothingEnabled = true;
+                blurMidCtx.clearRect(0, 0, 12, 12);
+                blurMidCtx.drawImage(cleanCanvas, bx, rawY, bw, bh, 0, 0, 12, 12);
+
+                blurTempCanvas.width = 6;
+                blurTempCanvas.height = 6;
                 blurTempCtx.imageSmoothingEnabled = true;
-                blurTempCtx.clearRect(0, 0, 16, 16);
-                blurTempCtx.drawImage(cleanCanvas, bx, rawY, bw, bh, 0, 0, 16, 16);
+                blurTempCtx.clearRect(0, 0, 6, 6);
+                blurTempCtx.drawImage(blurMidCanvas, 0, 0, 12, 12, 0, 0, 6, 6);
 
                 cleanCtx.save();
                 cleanCtx.beginPath();
-                cleanCtx.roundRect(bx, rawY, bw, bh, Math.min(bw, bh) * 0.24);
+                cleanCtx.roundRect(bx, rawY, bw, bh, Math.min(bw, bh) * 0.26);
                 cleanCtx.clip();
                 cleanCtx.imageSmoothingEnabled = true;
-                cleanCtx.drawImage(blurTempCanvas, 0, 0, 16, 16, bx, rawY, bw, bh);
+                cleanCtx.drawImage(blurTempCanvas, 0, 0, 6, 6, bx, rawY, bw, bh);
                 cleanCtx.restore();
             });
         }
