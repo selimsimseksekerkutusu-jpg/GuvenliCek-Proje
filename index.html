@@ -1554,65 +1554,52 @@
             const shiftX = Math.max(-maxShift, Math.min(maxShift, track.vx * elapsedSec));
             const shiftY = Math.max(-maxShift, Math.min(maxShift, track.vy * elapsedSec));
 
-            const predCx = track.cx + shiftX;
-            const predCy = track.cy + shiftY;
-            const maxDim = Math.max(track.rx, track.ry) * 2.2;
+            const cx = track.cx + shiftX;
+            const cy = track.cy + shiftY;
+            const rx = track.rx * 1.08;
+            const ry = track.ry * 1.08;
+            const angle = track.angle || 0;
 
-            const sx = Math.max(0, Math.floor(predCx - maxDim * 0.6));
-            const sy = Math.max(0, Math.floor(predCy - maxDim * 0.6));
-            const ex = Math.min(frameW, Math.ceil(predCx + maxDim * 0.6));
-            const ey = Math.min(frameH, Math.ceil(predCy + maxDim * 0.6));
+            const boundR = Math.max(rx, ry) * 1.15;
+            const sx = Math.max(0, Math.floor(cx - boundR));
+            const sy = Math.max(0, Math.floor(cy - boundR));
+            const ex = Math.min(frameW, Math.ceil(cx + boundR));
+            const ey = Math.min(frameH, Math.ceil(cy + boundR));
             const sw = ex - sx;
             const sh = ey - sy;
             if (sw <= 4 || sh <= 4) return;
 
-            ctx.save();
-            ctx.beginPath();
-            ctx.ellipse(predCx, predCy, track.rx, track.ry, track.angle || 0, 0, Math.PI * 2);
-            ctx.clip();
+            // Daha küçük ve parçalı piksel blokları (göz ve ağız yine kapalı kalır)
+            const blockSize = Math.max(8, Math.round(Math.max(rx, ry) * 0.14));
+            const gridW = Math.max(8, Math.round(sw / blockSize));
+            const gridH = Math.max(8, Math.round(sh / blockSize));
 
-            // Stage 1: Single-canvas two-pass spatial downscale to erase fine facial geometry
-            const w1 = Math.max(8, Math.round(sw * 0.055));
-            const h1 = Math.max(8, Math.round(sh * 0.055));
-            const w2 = Math.max(5, Math.round(sw * 0.032));
-            const h2 = Math.max(5, Math.round(sh * 0.032));
-            const offsetX2 = w1 + 4;
-            const reqWorkW = offsetX2 + w2 + 2;
-            const reqWorkH = Math.max(h1, h2) + 2;
-
-            if (blurWorkCanvas.width < reqWorkW || blurWorkCanvas.height < reqWorkH) {
-                blurWorkCanvas.width = Math.max(blurWorkCanvas.width, reqWorkW);
-                blurWorkCanvas.height = Math.max(blurWorkCanvas.height, reqWorkH);
+            if (blurWorkCanvas.width < sw || blurWorkCanvas.height < sh) {
+                blurWorkCanvas.width = Math.max(blurWorkCanvas.width, sw);
+                blurWorkCanvas.height = Math.max(blurWorkCanvas.height, sh);
             }
 
+            // 1. Önce ince hatları (göz, burun, ağız) renk ortalamasıyla erit
+            blurWorkCtx.save();
+            blurWorkCtx.clearRect(0, 0, sw, sh);
             blurWorkCtx.imageSmoothingEnabled = true;
             blurWorkCtx.imageSmoothingQuality = 'high';
-            blurWorkCtx.clearRect(0, 0, reqWorkW, reqWorkH);
-            blurWorkCtx.drawImage(cleanCanvas, sx, sy, sw, sh, 0, 0, w1, h1);
-            blurWorkCtx.drawImage(blurWorkCanvas, 0, 0, w1, h1, offsetX2, 0, w2, h2);
+            blurWorkCtx.drawImage(cleanCanvas, sx, sy, sw, sh, 0, 0, gridW, gridH);
+            blurWorkCtx.restore();
 
-            // Stage 2: Smooth Gaussian upscale + hardware Gaussian filter pass
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
+            // 2. Arkası hiç görünmeyecek şekilde (%100 opak) parlak ve doğal cilt tonlu parçalı pikselleri çiz
+            ctx.save();
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, rx, ry, angle, 0, Math.PI * 2);
+            ctx.closePath();
+            ctx.clip();
+
+            ctx.globalAlpha = 1.0;
             if (supportsCanvasFilter) {
-                const blurRadius = Math.max(18, Math.round(maxDim * 0.11));
-                ctx.filter = `blur(${blurRadius}px)`;
-                ctx.drawImage(blurWorkCanvas, offsetX2, 0, w2, h2, sx - 8, sy - 8, sw + 16, sh + 16);
-                ctx.filter = 'none';
-            } else {
-                ctx.drawImage(blurWorkCanvas, offsetX2, 0, w2, h2, sx, sy, sw, sh);
+                ctx.filter = 'brightness(1.06) saturate(1.08)';
             }
-
-            // Frosted Gaussian diffusion veil so high-contrast features never bleed through
-            const grad = ctx.createRadialGradient(
-                predCx, predCy, Math.min(track.rx, track.ry) * 0.25,
-                predCx, predCy, Math.max(track.rx, track.ry)
-            );
-            grad.addColorStop(0, 'rgba(20, 20, 25, 0.18)');
-            grad.addColorStop(1, 'rgba(15, 15, 20, 0.30)');
-            ctx.fillStyle = grad;
-            ctx.fillRect(sx, sy, sw, sh);
-
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(blurWorkCanvas, 0, 0, gridW, gridH, sx, sy, sw, sh);
             ctx.restore();
         }
 
